@@ -235,7 +235,7 @@ if [ "$mode" = --ci ]; then
     else
       sed 's/^/[FAIL] .file-lengths: /' "$tmp/added"
       echo "file-lengths: .file-lengths may only shrink. A reviewer allows an addition by" \
-        "putting the file-lengths-exception label on the pull request."
+        "putting the file-lengths-exception label on the pull request, then closing and reopening it."
       status=1
     fi
   fi

@@ -15,7 +15,7 @@
 #
 # .file-lengths may only shrink against the pull request base: new or raised
 # baseline, exempt or limit lines fail unless the pull request has the
-# file-lengths-exception label (labeled and unlabeled re-run the check).
+# file-lengths-exception label (then close and reopen the pull request to re-run).
 #
 # The engine below is scripts/check-file-lengths.sh, embedded so the job
 # fetches nothing: the ruleset's pinned commit pins the engine too, and
@@ -31,7 +31,9 @@ name: File Lengths
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # Required workflows ignore labeled/unlabeled events, so after adding the
+    # file-lengths-exception label, close and reopen the pull request to re-run.
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -291,7 +293,7 @@ jobs:
               else
                 sed 's/^/[FAIL] .file-lengths: /' "$tmp/added"
                 echo "file-lengths: .file-lengths may only shrink. A reviewer allows an addition by" \
-                  "putting the file-lengths-exception label on the pull request."
+                  "putting the file-lengths-exception label on the pull request, then closing and reopening it."
                 status=1
               fi
             fi
@@ -312,7 +314,7 @@ jobs:
             if [ "$status" -eq 0 ]; then echo "Every file is within its limit."; else
               echo "Violations (exit $status). For files that were already oversized, run this at the"
               echo "repository root, commit .file-lengths and label the pull request file-lengths-exception"
-              echo "(see the malcomsonbrothers/org-checks README):"
+              echo "then close and reopen the pull request to re-run this check (see the malcomsonbrothers/org-checks README):"
               printf '\n    %s\n\n' 'check-file-lengths.sh --print-baseline >> .file-lengths'
             fi
             echo '```'
