@@ -1,6 +1,7 @@
-# Tests for the file length check, its git hooks and the copy embedded in
-# file-lengths.yml. This repository's own file length check is
-# file-lengths.yml, which runs on its pull requests like any other workflow.
+# Tests for the file length check, its git hooks, the pull request title
+# check and the copies embedded in their workflows. This repository's own
+# file length check is file-lengths.yml, which runs on its pull requests
+# like any other workflow.
 # Self-hosted Linux runners on metal-02, never GitHub-hosted runners.
 
 name: Tests
@@ -23,3 +24,6 @@ jobs:
 
       - name: Test the file length check and its hooks
         run: scripts/check-file-lengths.test.sh
+
+      - name: Test the pull request title check
+        run: scripts/check-pr-title.test.sh
