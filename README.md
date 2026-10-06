@@ -76,6 +76,28 @@ Pre-commit checks the staged content; pre-push checks the files changed in
 the commits being pushed (a new branch from its merge-base with the default
 branch).
 
+## Pull request titles
+
+Candidate required workflow: `.github/workflows/pr-title.yml`. It is not in
+any ruleset yet. It fails unless the pull request title is a Conventional
+Commit subject, `type(scope)!: summary` with the scope and `!` optional:
+
+- types: `feat fix docs style refactor perf test build ci chore revert`
+- scope: lower-case letters, digits and `. _ / , -`, e.g. `feat(web,api): ...`
+- revert with `revert: ...`, not git's `Revert "..."`
+
+This is the pattern the organisation commit-message rulesets apply to
+commits on default branches and `staging`, so a squash merge that takes the
+title as its commit subject passes them as well.
+
+Required workflows only run on `opened`, `synchronize` and `reopened`, not
+on `edited`, and a re-run replays the original event. The job therefore
+reads the current title through the API. To fix a failure, edit the title,
+then re-run the failed check (or close and reopen the pull request).
+
+The workflow embeds `scripts/check-pr-title.sh` in the same way as the file
+length check; `scripts/check-pr-title.test.sh` fails while the two differ.
+
 ## Changing a check
 
 The required workflow embeds `scripts/check-file-lengths.sh`, so the job

@@ -1,0 +1,92 @@
+# Org pull request title check, a candidate required workflow
+#
+# Like file-lengths.yml, an org ruleset's "Require workflows to pass" rule can
+# point at this file at a pinned commit, so it runs on every pull request in
+# every organisation repository, in the context of that repository. It is not
+# in any ruleset yet. It also runs on this repository's own pull requests.
+#
+# It fails unless the pull request title is a Conventional Commit subject
+# (type(scope)!: summary), the pattern the org commit-message rulesets apply to
+# commits on default branches and staging. With squash merges set to use the
+# pull request title, the merged commit then passes those rulesets too.
+#
+# Required workflows ignore the edited event (only opened, synchronize and
+# reopened run), and a re-run replays the original event payload. So the job
+# reads the LIVE title through the API rather than from the event: after
+# editing the title, re-run this check (or close and reopen the pull request).
+#
+# The engine below is scripts/check-pr-title.sh, embedded so the job fetches
+# nothing and the ruleset's pinned commit pins the engine too. After editing
+# the script, paste it back between <<'ENGINE' and ENGINE indented ten spaces;
+# scripts/check-pr-title.test.sh fails while the two differ.
+#
+# It runs on our self-hosted Linux runners on metal-02, never on GitHub-hosted
+# runners (the organisation's Actions budget is zero). A repository can only
+# run it if one of its runner groups gives it a runner with these labels.
+
+name: PR Title
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-title:
+    runs-on: [self-hosted, Linux, metal]
+    timeout-minutes: 2
+    steps:
+      - name: Check the pull request title
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          engine="$RUNNER_TEMP/check-pr-title.sh"
+          cat > "$engine" <<'ENGINE'
+          #!/usr/bin/env bash
+          # Checks that a pull request title is a Conventional Commit subject: type(scope)!: summary,
+          # with the scope and ! optional. The pattern matches the org commit-message rulesets, so a
+          # squash merge that takes the title as its commit subject passes them too.
+          #   check-pr-title.sh "<title>"
+          set -euo pipefail
+          export LC_ALL=C
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/,-]+\))?!?: .+'
+          title=${1-}
+          if [[ $title != *$'\n'* && $title =~ $pattern ]]; then
+            echo "pr-title: ok: $title"
+            exit 0
+          fi
+          cat <<MSG
+          [FAIL] The pull request title is not a Conventional Commit:
+              $title
+          Expected: type(scope)!: summary, where (scope) and ! are optional, for example
+              feat(api): add the export endpoint
+              fix: handle an empty basket
+              refactor(web,api)!: rename the session cookie
+          Types: feat fix docs style refactor perf test build ci chore revert.
+          Scopes: lower-case letters, digits and . _ / , - only.
+          To fix: edit the title, then re-run this check (or close and reopen the pull request).
+          Editing the title does not re-run it by itself; a re-run reads the current title.
+          MSG
+          exit 1
+          ENGINE
+          chmod +x "$engine"
+          # The live title, not github.event.pull_request.title: a re-run replays the old event.
+          title=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title)
+          status=0
+          out=$("$engine" "$title" 2>&1) || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=pr-title::The pull request title is not a Conventional Commit (type(scope)!: summary). Edit the title, then re-run this check (or close and reopen the pull request)."
+          fi
+          {
+            echo "## Pull request title"
+            echo '```'
+            printf '%s\n' "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
