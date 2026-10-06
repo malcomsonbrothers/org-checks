@@ -159,12 +159,14 @@ scripts/check-file-lengths.sh --print-baseline 2>/dev/null | grep -q . && expect
 repo adoptclean; lines 10 a.rs; check --print-baseline; expect "nothing oversized prints nothing" 0
 [ -z "$out" ] || expect "print-baseline output is empty" x
 
-# The required workflow always enforces, on pull requests, from GitHub-hosted runners.
+# The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/file-lengths.yml"
 run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no report mode or workflow_call in the required workflow" 1
-run grep -n -E '^  pull_request:$|runs-on: ubuntu-latest|--ci "\$PR_BASE"' "$wf"
+run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, metal\]$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 3 ] && rc=0 || rc=1
-expect "required workflow: pull_request trigger, ubuntu-latest, --ci against the base" 0
+expect "required workflow: pull_request trigger, self-hosted runner, --ci against the base" 0
+run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$here"/.github/workflows/*.yml
+expect "no workflow uses a GitHub-hosted runner" 1
 
 # The required workflow embeds this exact script.
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' \
