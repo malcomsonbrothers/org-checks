@@ -43,12 +43,15 @@ it applies the organisation limits with nothing exempt. A repository's
 
 `.file-lengths` may only shrink against the pull request base. A new or
 raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
-`file-lengths-exception` label to the pull request.
+`file-lengths-exception` label to the pull request and then closes and
+reopens it. Required workflows do not re-run on label changes, so the
+reopen is what makes the check see the label.
 
 ### Fixing a pull request that fails on files that were already oversized
 
 Run this at the repository root, commit `.file-lengths`, and ask a reviewer
-to label the pull request `file-lengths-exception`:
+to label the pull request `file-lengths-exception`, then close and reopen
+the pull request so the check re-runs with the label:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-file-lengths.sh |
