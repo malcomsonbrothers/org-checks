@@ -1,7 +1,7 @@
 # Tests for the file length check, its git hooks and the copy embedded in
 # file-lengths.yml. This repository's own file length check is
 # file-lengths.yml, which runs on its pull requests like any other workflow.
-# GitHub-hosted runners only: this repository is public.
+# Self-hosted Linux runners on metal-02, never GitHub-hosted runners.
 
 name: Tests
 
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, metal]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -24,8 +24,9 @@
 # indented ten spaces; scripts/check-file-lengths.test.sh fails while the two
 # differ.
 #
-# It runs on GitHub-hosted ubuntu-latest so that it works in every
-# repository, including those that cannot use the self-hosted runner group.
+# It runs on our self-hosted Linux runners on metal-02, never on GitHub-hosted
+# runners (the organisation's Actions budget is zero). A repository can only
+# run it if one of its runner groups gives it a runner with these labels.
 
 name: File Lengths
 
@@ -40,7 +41,7 @@ permissions:
 
 jobs:
   file-lengths:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, metal]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

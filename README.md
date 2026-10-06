@@ -11,10 +11,10 @@ in every organisation repository, in the context of that repository.
 
 ## File lengths
 
-Required workflow: `.github/workflows/file-lengths.yml`. It runs on
-GitHub-hosted `ubuntu-latest`, so it works in every repository, including
-those that cannot use the self-hosted runner group. It always enforces: any
-violation fails the pull request.
+Required workflow: `.github/workflows/file-lengths.yml`. It runs on our
+self-hosted Linux runners (`[self-hosted, Linux, metal]`), never on
+GitHub-hosted runners, so a repository needs a runner group that gives it one
+of those runners. It always enforces: any violation fails the pull request.
 
 ### Limits
 
