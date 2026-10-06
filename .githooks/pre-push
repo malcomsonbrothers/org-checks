@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Checks what each pushed ref carries: files changed since the remote commit (or, for a
+# new branch, since its merge-base with the default branch), read at the pushed commit.
+set -euo pipefail
+check="$(git rev-parse --show-toplevel)/scripts/check-file-lengths.sh"
+status=0
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  case $local_sha in *[!0]*) ;; *) continue ;; esac # deleting a remote ref sends no files
+  "$check" --range "$remote_sha" "$local_sha" || status=1
+done
+exit "$status"

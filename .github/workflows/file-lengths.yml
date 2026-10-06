@@ -1,0 +1,322 @@
+# Org file length check, run as a required workflow
+#
+# An org ruleset's "Require workflows to pass" rule points at this file in
+# malcomsonbrothers/org-checks, at a pinned commit, so it runs on every pull
+# request in every org repository, in the context of that repository. It also
+# runs on this repository's own pull requests as an ordinary workflow. There
+# is no per-repository caller file.
+#
+# It measures the pull request's checkout against the org line limits (fixed
+# in scripts/check-file-lengths.sh: 600 for code, 250 for shell and SQL) and
+# the repository's optional .file-lengths (repo-added limits for uncovered
+# file types, exempt globs, grandfathered baseline rows). A missing
+# .file-lengths never skips the check. It always enforces: any violation
+# fails the job.
+#
+# .file-lengths may only shrink against the pull request base: new or raised
+# baseline, exempt or limit lines fail unless the pull request has the
+# file-lengths-exception label (labeled and unlabeled re-run the check).
+#
+# The engine below is scripts/check-file-lengths.sh, embedded so the job
+# fetches nothing: the ruleset's pinned commit pins the engine too, and
+# github.workflow_sha would name the calling repository's commit, not this
+# one. After editing the script, paste it back between <<'ENGINE' and ENGINE
+# indented ten spaces; scripts/check-file-lengths.test.sh fails while the two
+# differ.
+#
+# It runs on GitHub-hosted ubuntu-latest so that it works in every
+# repository, including those that cannot use the self-hosted runner group.
+
+name: File Lengths
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  file-lengths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check file lengths
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          FILE_LENGTHS_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'file-lengths-exception') }}
+          FILE_LENGTHS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          engine="$RUNNER_TEMP/check-file-lengths.sh"
+          cat > "$engine" <<'ENGINE'
+          #!/usr/bin/env bash
+          # Org-wide per-file line limits. Needs only bash, git and awk. Never skips: with no
+          # .file-lengths the org limits below apply with no exemptions and no baseline.
+          #   check-file-lengths.sh                  tracked and untracked files in the working tree
+          #   check-file-lengths.sh --staged         the index (pre-commit); lowers or drops shrunk rows
+          #   check-file-lengths.sh --range BASE TIP files changed in BASE...TIP, read at TIP (pre-push)
+          #   check-file-lengths.sh --ci BASE        the working tree, and .file-lengths may not add
+          #                                          baseline, exempt or limit lines compared with BASE
+          #                                          unless FILE_LENGTHS_EXCEPTION=true (the PR label)
+          #   check-file-lengths.sh --print-baseline "baseline <path> <lines>" for every oversized file
+          # An all-zero or missing BASE falls back to the merge-base with the default branch
+          # (FILE_LENGTHS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
+          # .file-lengths lines (a repo may not change an org limit, only add new file types):
+          #   limit <max lines> <extensions...>   exempt <glob>   baseline <path> <lines>
+          # Globs: * is one path segment, ** any depth; other characters are literal.
+          set -euo pipefail
+          export LC_ALL=C
+
+          # Org default limits. Extension-less files whose shebang runs sh, bash or zsh get 250.
+          org_limits="600 rs svelte ts tsx js jsx mjs cjs mts cts py css scss swift go kt;250 sh bash zsh sql"
+          shell_limit=250
+
+          cd "$(git rev-parse --show-toplevel)"
+          config=.file-lengths
+          mode=${1:-all}
+          tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+          fail() { echo "file-lengths: $*" >&2; exit 2; }
+          is_zero() { case ${1:-0} in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+          default_branch() {
+            local b d=${FILE_LENGTHS_DEFAULT_BRANCH:-}
+            for b in ${d:+"origin/$d" "$d"} "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || :)" \
+              origin/main origin/master; do
+              [ -n "$b" ] && git rev-parse -q --verify "$b^{commit}" >/dev/null && { echo "$b"; return; }
+            done
+            return 0
+          }
+
+          # Prints the merge-base of TIP with the default branch, or nothing (check every file).
+          fallback_base() {
+            local d
+            d=$(default_branch)
+            [ -n "$d" ] && git merge-base "$1" "$d" 2>/dev/null || true
+          }
+
+          # Turns org limits plus a .file-lengths text (stdin) into rule records:
+          #   O ext max (org) | L ext max (repo) | E regex glob | B path lines | X error
+          parse_rules() {
+            awk -v org="$org_limits" -v cfg="$1" '
+              function glob_re(g,   r, c, i) {
+                r = ""
+                for (i = 1; i <= length(g); i++) {
+                  c = substr(g, i, 1)
+                  if (c == "*" && substr(g, i, 3) == "**/") { r = r "(.*/)?"; i += 2 }
+                  else if (c == "*" && substr(g, i, 2) == "**") { r = r ".*"; i++ }
+                  else if (c == "*") r = r "[^/]*"
+                  else if (c == "?") r = r "[^/]"
+                  else if (index("\\.[]()+{}|^$", c)) r = r "\\" c
+                  else r = r c
+                }
+                return "^" r "$"
+              }
+              function err(m) { print "X " cfg ":" NR ": " m }
+              BEGIN {
+                n = split(org, rows, ";")
+                for (i = 1; i <= n; i++) {
+                  k = split(rows[i], w, " ")
+                  for (j = 2; j <= k; j++) { orgl[w[j]] = w[1]; print "O " w[j] " " w[1] }
+                }
+              }
+              { sub(/\r$/, "") }
+              /^[ \t]*(#|$)/ { next }
+              $1 == "limit" {
+                if ($2 !~ /^[0-9]+$/ || NF < 3) { err("expected: limit <max lines> <extensions...>"); next }
+                for (j = 3; j <= NF; j++) {
+                  e = $j; sub(/^\./, "", e)
+                  if (e in orgl) err("limit for ." e " is set org-wide to " orgl[e] " lines in the shared check; a repo may not change it")
+                  else print "L " e " " $2
+                }
+                next
+              }
+              $1 == "exempt" && NF == 2 { print "E " glob_re($2) " " $2; next }
+              $1 == "baseline" && NF == 3 && $3 ~ /^[0-9]+$/ {
+                if ($2 in seen) err("duplicate baseline row for " $2)
+                seen[$2] = 1; print "B " $2 " " $3; next
+              }
+              { err("unknown or malformed line: " $0) }'
+          }
+
+          # Prints "lines<TAB>shebang-is-shell<TAB>path" for each non-empty file named on stdin
+          # (newline separated, relative to the current directory).
+          count_files() {
+            sed 's|^|./|' | tr '\n' '\0' | xargs -0 -r awk '
+              FNR == 1 {
+                if (p != "") print n "\t" s "\t" p
+                p = substr(FILENAME, 3); l = $0; sub(/\r$/, "", l)
+                s = (l ~ /^#![ \t]*[^ \t]*\/(env[ \t]+(-S[ \t]+)?)?(sh|bash|zsh)([ \t]|$)/) ? 1 : 0
+              }
+              { n = FNR }
+              END { if (p != "") print n "\t" s "\t" p }'
+          }
+
+          # Keeps paths (stdin) that have a limited extension or no extension and are not exempt.
+          candidates() {
+            awk -v rules="$tmp/rules" '
+              BEGIN { while ((getline r < rules) > 0) { split(r, w, " ")
+                if (w[1] == "O" || w[1] == "L") lim[w[2]] = 1; else if (w[1] == "E") ex[w[2]] = 1 } }
+              { b = $0; sub(/.*\//, "", b); e = ""
+                if (b ~ /^[^.].*\.[^.]+$/) { e = b; sub(/.*\./, "", e) }
+                if (e != "" && !(e in lim)) next
+                for (re in ex) if ($0 ~ re) next
+                print }'
+          }
+
+          # Copies regular-file blobs ("mode sha<TAB>path" on stdin, for paths in $tmp/want) into
+          # $tmp/t, then counts them there.
+          count_blobs() {
+            local meta mode sha p
+            mkdir -p "$tmp/t"
+            awk -F '\t' 'NR == FNR { want[$0] = 1; next } ($2 in want)' "$tmp/want" - |
+              while IFS="$(printf '\t')" read -r meta p; do
+                mode=${meta%% *}; sha=${meta#* }
+                case $mode in 100644|100755) ;; *) continue ;; esac
+                mkdir -p "$tmp/t/$(dirname "$p")"
+                git cat-file blob "$sha" > "$tmp/t/$p"
+                printf '%s\n' "$p"
+              done > "$tmp/blobs"
+            (cd "$tmp/t" && count_files < "$tmp/blobs")
+          }
+
+          # Load the configuration from the place the mode measures.
+          case $mode in
+            --staged) git show ":$config" 2>/dev/null > "$tmp/cfg" || : > "$tmp/cfg" ;;
+            --range)
+              [ $# -eq 3 ] || fail "usage: --range BASE TIP"
+              tip=$(git rev-parse -q --verify "$3^{commit}") || fail "unknown commit $3"
+              base=$2
+              if is_zero "$base"; then base=$(fallback_base "$tip")
+              elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+                fail "remote commit $base is not in this clone; run git fetch and push again"
+              fi
+              git show "$tip:$config" 2>/dev/null > "$tmp/cfg" || : > "$tmp/cfg" ;;
+            --ci|--print-baseline|all) cat "$config" 2>/dev/null > "$tmp/cfg" || : > "$tmp/cfg" ;;
+            *) fail "unknown mode $mode" ;;
+          esac
+          parse_rules "$config" < "$tmp/cfg" > "$tmp/rules"
+
+          # Measure. $tmp/exists lists every path present, for stale baseline rows.
+          case $mode in
+            --staged)
+              git ls-files -s -z | tr '\0' '\n' |
+                awk -F '\t' '{ split($1, m, " "); print m[1] " " m[2] "\t" $2 }' > "$tmp/index"
+              cut -f2- "$tmp/index" > "$tmp/exists"
+              git diff --cached --name-only --no-renames --diff-filter=d -z | tr '\0' '\n' | candidates > "$tmp/want"
+              count_blobs < "$tmp/index" > "$tmp/counts" ;;
+            --range)
+              git ls-tree -r -z "$tip" | tr '\0' '\n' |
+                awk -F '\t' '{ split($1, m, " "); print m[1] " " m[3] "\t" $2 }' > "$tmp/tree"
+              cut -f2- "$tmp/tree" > "$tmp/exists"
+              if [ -n "$base" ]; then
+                git diff --name-only --no-renames --diff-filter=d -z "$base...$tip" | tr '\0' '\n'
+              else cut -f2- "$tmp/tree"; fi | candidates > "$tmp/want"
+              count_blobs < "$tmp/tree" > "$tmp/counts" ;;
+            *)
+              git ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | sort -u > "$tmp/exists"
+              candidates < "$tmp/exists" | while IFS= read -r f; do
+                if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\n' "$f"; fi
+              done | count_files > "$tmp/counts" ;;
+          esac
+
+          status=0
+          awk -F '\t' -v staged="$([ "$mode" = --staged ] && echo 1 || echo 0)" -v sl="$shell_limit" \
+            -v pb="$([ "$mode" = --print-baseline ] && echo 1 || echo 0)" '
+            FILENAME == ARGV[1] { split($0, w, " ")
+              if (w[1] == "O" || w[1] == "L") lim[w[2]] = w[3]; else if (w[1] == "B") row[w[2]] = w[3]
+              else if (w[1] == "X") { sub(/^X /, ""); m = "[FAIL] " $0; if (pb) print m > "/dev/stderr"; else print m; bad = 1 }
+              next }
+            FILENAME == ARGV[2] { have[$0] = 1; next }
+            { n = $1; p = $3; b = p; sub(/.*\//, "", b); e = ""
+              if (b ~ /^[^.].*\.[^.]+$/) { e = b; sub(/.*\./, "", e) }
+              max = e != "" ? lim[e] : ($2 == 1 ? sl : "")
+              if (pb) { if (max != "" && n > max) print "baseline " p " " n; next }
+              if (max == "") { if (p in row) { print "[FAIL] " p ": baseline row for a file with no limit, delete it"; bad = 1 }; next }
+              if (p in row) {
+                if (n > row[p]) { print "[FAIL] " p ": " n " lines, baseline " row[p] " (grew; split it)"; bad = 1 }
+                else if ((n < row[p] || n <= max) && staged) print (n > max ? "LOWER " p " " n : "DROP " p)
+                else if (n < row[p]) { print "[FAIL] " p ": " n " lines, lower its baseline row from " row[p] " to " (n > max ? n : "nothing (delete the row)"); bad = 1 }
+                else if (n <= max) { print "[FAIL] " p ": " n " lines is within the limit " max ", delete its baseline row"; bad = 1 }
+              } else if (n > max) { print "[FAIL] " p ": " n " lines, limit " max " (split it)"; bad = 1 }
+            }
+            END {
+              for (p in row) if (!pb && !(p in have)) {
+                if (staged) print "DROP " p; else { print "[FAIL] baseline row for missing file " p; bad = 1 }
+              }
+              exit bad
+            }' "$tmp/rules" "$tmp/exists" "$tmp/counts" > "$tmp/out" || status=1
+          grep -v -E '^(LOWER|DROP) ' "$tmp/out" || true
+          [ "$mode" != --print-baseline ] || exit "$status"
+
+          # Pre-commit: rewrite lowered or dropped rows in the index copy (and the working copy).
+          if grep -q -E '^(LOWER|DROP) ' "$tmp/out"; then
+            rewrite() {
+              awk -v edits="$tmp/out" '
+                BEGIN { while ((getline r < edits) > 0) { split(r, w, " ")
+                  if (w[1] == "LOWER") to[w[2]] = w[3]; else if (w[1] == "DROP") to[w[2]] = "" } }
+                $1 == "baseline" && ($2 in to) { if (to[$2] != "") print "baseline " $2 " " to[$2]; next }
+                { print }'
+            }
+            sha=$(rewrite < "$tmp/cfg" | git hash-object -w --stdin)
+            git update-index --add --cacheinfo "100644,$sha,$config"
+            if [ -f "$config" ]; then rewrite < "$config" > "$tmp/wt" && cat "$tmp/wt" > "$config"; fi
+            sed -n 's/^LOWER \(.*\) \([0-9]*\)$/file-lengths: lowered the baseline row for \1 to \2 (staged)/p
+          s/^DROP \(.*\)$/file-lengths: dropped the baseline row for \1 (staged)/p' "$tmp/out"
+          fi
+
+          # CI: .file-lengths may only shrink compared with BASE.
+          if [ "$mode" = --ci ]; then
+            base=${2:-}
+            if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
+            if [ -n "$base" ]; then git show "$base:$config" 2>/dev/null || true; fi |
+              parse_rules "$base:$config" | grep -v '^[OX] ' > "$tmp/old-rules" || true
+            grep -v '^[OX] ' "$tmp/rules" > "$tmp/new-rules" || true
+            awk '
+              FILENAME == ARGV[1] { old[$1 " " $2] = $3; next }
+              { k = $1 " " $2 }
+              $1 == "B" && !(k in old) { print "new baseline row " $2 " " $3; next }
+              $1 == "B" && $3 > old[k] { print "baseline row " $2 " raised from " old[k] " to " $3; next }
+              $1 == "E" && !(k in old) { print "new exempt line " $3; next }
+              $1 == "L" && !(k in old) { print "new limit " $3 " for ." $2; next }
+              $1 == "L" && $3 > old[k] { print "limit for ." $2 " raised from " old[k] " to " $3 }
+            ' "$tmp/old-rules" "$tmp/new-rules" > "$tmp/added"
+            if [ -s "$tmp/added" ]; then
+              if [ "${FILE_LENGTHS_EXCEPTION:-}" = true ]; then
+                sed 's/^/file-lengths: allowed by the file-lengths-exception label: /' "$tmp/added"
+              else
+                sed 's/^/[FAIL] .file-lengths: /' "$tmp/added"
+                echo "file-lengths: .file-lengths may only shrink. A reviewer allows an addition by" \
+                  "putting the file-lengths-exception label on the pull request."
+                status=1
+              fi
+            fi
+          fi
+
+          [ "$status" -eq 0 ] && echo "file-lengths: ok" || echo "file-lengths: see .file-lengths and scripts/check-file-lengths.sh"
+          exit "$status"
+          ENGINE
+          chmod +x "$engine"
+          status=0
+          out=$("$engine" --ci "$PR_BASE" 2>&1) || status=$?
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | sed -n -e 's/%/%25/g' \
+            -e "s/^\[FAIL\] \([^:]*\): \(.*\)$/::error file=\1,title=file-lengths::\2/p" \
+            -e "s/^\[FAIL\] \([^:]*\)$/::error title=file-lengths::\1/p"
+          {
+            echo "## File lengths"
+            if [ "$status" -eq 0 ]; then echo "Every file is within its limit."; else
+              echo "Violations (exit $status). For files that were already oversized, run this at the"
+              echo "repository root, commit .file-lengths and label the pull request file-lengths-exception"
+              echo "(see the malcomsonbrothers/org-checks README):"
+              printf '\n    %s\n\n' 'check-file-lengths.sh --print-baseline >> .file-lengths'
+            fi
+            echo '```'
+            printf '%s\n' "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
