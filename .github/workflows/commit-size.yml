@@ -13,8 +13,9 @@
 # pnpm-lock.yaml, yarn.lock, uv.lock) never count, nor do paths the
 # repository lists as `exempt <glob>` in .commit-size at the pull request
 # head, nor real binaries of common asset formats. A missing .commit-size
-# never skips the check. A promotion into the default branch skips commits
-# already on origin/staging, which passed this check on their way in.
+# never skips the check. A promotion (this repository's staging branch into
+# its default branch) skips commits already on origin/staging, which passed
+# this check on their way in.
 #
 # .commit-size may only shrink against the pull request base: a new exempt
 # line fails unless the pull request has the commit-size-exception label. The
@@ -58,6 +59,9 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           COMMIT_SIZE_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          COMMIT_SIZE_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          COMMIT_SIZE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          COMMIT_SIZE_REPO: ${{ github.repository }}
           COMMIT_SIZE_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'commit-size-exception') }}
           COMMIT_SIZE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -68,25 +72,28 @@ jobs:
           # may change at most 1,000 lines (additions plus deletions, renames detected), not counting
           # lockfiles, real binaries of the listed formats or paths the repo exempts in .commit-size.
           # Other binaries count a line per 40 bytes; a merge counts what it adds beyond an automatic
-          # merge; a path with a newline or tab fails. Never skips.
+          # merge; a path with a newline or tab, or an octopus merge, fails. Never skips.
           #   check-commit-size.sh [BASE [TIP]]   commits in BASE..TIP (TIP defaults to HEAD)
           #   check-commit-size.sh --ci BASE TIP  the same, and .commit-size may not add exempt lines
           #                                       compared with BASE. COMMIT_SIZE_EXCEPTION=true (the
           #                                       PR label) allows oversized commits and new lines.
           # An all-zero or missing BASE falls back to the merge-base with the default branch
           # (COMMIT_SIZE_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master); with
-          # none, every commit reachable from TIP is checked. With COMMIT_SIZE_BASE_REF equal to the
-          # default branch, commits already on origin/staging are skipped (a promotion).
+          # none, every commit reachable from TIP is checked. A promotion (COMMIT_SIZE_BASE_REF is the
+          # default branch, COMMIT_SIZE_HEAD_REF is staging and COMMIT_SIZE_HEAD_REPO equals
+          # COMMIT_SIZE_REPO) skips commits already on origin/staging.
           # .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
           # Globs: * is one path segment, ** any depth; other characters are literal.
           set -euo pipefail
           export LC_ALL=C
 
-          # Org limit and the lockfiles never counted, at any depth. No repository can change them.
+          # Org limit, and lockfile:manifest pairs: a lockfile is never counted where its manifest sits
+          # beside it in the commit. No repository can change them.
           limit=1000
-          lockfiles="Cargo.lock bun.lock package-lock.json pnpm-lock.yaml yarn.lock uv.lock"
+          lockfiles="Cargo.lock:Cargo.toml bun.lock:package.json package-lock.json:package.json"
+          lockfiles+=" pnpm-lock.yaml:package.json yarn.lock:package.json uv.lock:pyproject.toml"
           # Binary formats exempt only where the content really is binary (to git, ignoring attributes).
-          binexts="png jpg jpeg gif webp ico woff woff2 ttf otf pdf mp4 webm wasm"
+          binexts="png jpg jpeg gif webp avif ico woff woff2 ttf otf pdf mp4 webm wasm jar so zip gz tar"
 
           cd "$(git rev-parse --show-toplevel)"
           config=.commit-size
@@ -111,7 +118,7 @@ jobs:
           }
 
           # Turns the org lockfiles plus a .commit-size text (stdin) into rule records:
-          #   D regex glob (org lockfile) | E regex glob (repo exempt) | X error
+          #   D regex lockfile manifest (org lockfile) | E regex glob (repo exempt) | X error
           parse_rules() {
             awk -v locks="$lockfiles" -v cfg="$1" '
               function glob_re(g,   r, c, i) {
@@ -127,7 +134,8 @@ jobs:
                 }
                 return "^" r "$"
               }
-              BEGIN { n = split(locks, l, " "); for (i = 1; i <= n; i++) print "D " glob_re("**/" l[i]) " " l[i] }
+              BEGIN { n = split(locks, l, " "); for (i = 1; i <= n; i++) { split(l[i], m, ":")
+                print "D " glob_re("**/" m[1]) " " m[1] " " m[2] } }
               { sub(/\r$/, "") }
               /^[ \t]*(#|$)/ { next }
               $1 == "exempt" && NF == 2 { print "E " glob_re($2) " " $2; next }
@@ -142,6 +150,7 @@ jobs:
             local c=$1 p ps tree opts=(-r -M -l0 --no-textconv --no-abbrev --raw --numstat -z)
             local g=(git -c core.attributesFile=/dev/null --attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904)
             read -r -a ps < <(git rev-list --parents -n 1 "$c")
+            [ "${#ps[@]}" -le 3 ] || return 3
             if [ "${#ps[@]}" -le 2 ]; then "${g[@]}" diff-tree --root --no-commit-id "${opts[@]}" "$c"; return; fi
             tree=$(git rev-parse "$c^{tree}")
             for p in "${ps[@]:1}"; do [ "$(git rev-parse "$p^{tree}")" != "$tree" ] || return 0; done
@@ -150,21 +159,40 @@ jobs:
 
           # Reads diff_of output (NULs turned into newlines, after refusing paths with a newline) and
           # prints "class<TAB>add<TAB>del<TAB>new blob<TAB>binary<TAB>listed format<TAB>path" per
-          # file. Class: T a path has a tab | E exempt | W renamed out of an exempt path | N counted.
+          # file. Class: T a path has a tab | E exempt | W renamed out of an exempt path or a lockfile
+          # | N counted | L:<manifest>:<W or N> a lockfile, exempt only beside its manifest. A binary
+          # renamed unchanged (same blob) is not binary to the tally, so it counts 0.
           classify() {
             awk -v rules="$tmp/rules" -v bin="$binexts" '
-              BEGIN { while ((getline r < rules) > 0) { split(r, w, " "); if (w[1] == "D" || w[1] == "E") ex[w[2]] = 1 }
+              BEGIN { while ((getline r < rules) > 0) { split(r, w, " "); if (w[1] == "E") ex[w[2]] = 1
+                  else if (w[1] == "D") lk[w[2]] = w[4] }
                 n = split(bin, b, " "); for (k = 1; k <= n; k++) isbin[b[k]] = 1 }
               function exempt(p,   re) { for (re in ex) if (p ~ re) return 1; return 0 }
+              function lock(p,   re) { for (re in lk) if (p ~ re) return lk[re]; return "" }
               rp == 2 { old[i] = $0; rp = 1; next }
               rp == 1 { new[i] = $0; if (!ren[i]) old[i] = $0; rp = 0; next }
               np > 0 { np--; next }
-              !num && /^:/ { i++; split($0, h, " "); sha[i] = h[4]; ren[i] = h[5] ~ /^[RC]/; rp = ren[i] ? 2 : 1; next }
+              !num && /^:/ { i++; split($0, h, " "); osha[i] = h[3]; sha[i] = h[4]; ren[i] = h[5] ~ /^[RC]/; rp = ren[i] ? 2 : 1; next }
               { num = 1; j++; split($0, f, "\t"); np = ren[j] ? 2 : 0; o = old[j]; p = new[j]
                 e = tolower(p); sub(/.*\//, "", e); if (e !~ /^[^.].*\.[^.]+$/) e = ""; sub(/.*\./, "", e)
-                if (o ~ /\t/ || p ~ /\t/) c = "T"; else if (exempt(p)) c = "E"
-                else if (ren[j] && exempt(o)) c = "W"; else c = "N"
-                print c "\t" f[1] + 0 "\t" f[2] + 0 "\t" sha[j] "\t" (f[1] == "-") "\t" ((e in isbin) ? 1 : 0) "\t" p }'
+                fb = ren[j] && (exempt(o) || lock(o) != "") ? "W" : "N"; m = lock(p)
+                if (o ~ /\t/ || p ~ /\t/) c = "T"; else if (exempt(p)) c = "E"; else c = m != "" ? "L:" m ":" fb : fb
+                bn = f[1] == "-" && !(ren[j] && osha[j] == sha[j] && fb == "N")
+                print c "\t" f[1] + 0 "\t" f[2] + 0 "\t" sha[j] "\t" bn "\t" ((e in isbin) ? 1 : 0) "\t" p }'
+          }
+
+          # Rewrites the L rows of $tmp/rows for commit C: E when the manifest sits beside the
+          # lockfile (in C, or in its first parent for a deletion), else the fallback class.
+          resolve_locks() {
+            local c=$1 cls a d sha bn be p dir ref
+            while IFS=$'\t' read -r cls a d sha bn be p; do
+              case $cls in
+                L:*) dir=""; case $p in */*) dir=${p%/*}/ ;; esac
+                  ref=$c; if is_zero "$sha"; then ref="$c^"; fi
+                  set -- "${cls#L:}"; if git cat-file -e "$ref:$dir${1%%:*}" 2>/dev/null; then cls=E; else cls=${1##*:}; fi ;;
+              esac
+              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$cls" "$a" "$d" "$sha" "$bn" "$be" "$p"
+            done
           }
 
           # Prints "<counted> <exempt> <paths with a tab>" for the rows in $tmp/rows. A binary (to git:
@@ -204,11 +232,12 @@ jobs:
           status=0
           if grep -q '^X ' "$tmp/rules"; then sed -n 's/^X /[FAIL] /p' "$tmp/rules"; status=1; fi
 
-          # A promotion (a pull request into the default branch, in a repository with a staging branch)
+          # A promotion (a pull request from this repository's staging branch into its default branch)
           # skips commits already on origin/staging: they passed this check on their way into staging.
           skip=""
           if [ -n "${COMMIT_SIZE_BASE_REF:-}" ] && [ "$COMMIT_SIZE_BASE_REF" = "${COMMIT_SIZE_DEFAULT_BRANCH:-}" ] &&
-            git rev-parse -q --verify "refs/remotes/origin/staging^{commit}" >/dev/null; then
+            [ "${COMMIT_SIZE_HEAD_REF:-}" = staging ] && [ -n "${COMMIT_SIZE_REPO:-}" ] &&
+            [ "${COMMIT_SIZE_HEAD_REPO:-}" = "$COMMIT_SIZE_REPO" ] && git rev-parse -q --verify "refs/remotes/origin/staging^{commit}" >/dev/null; then
             skip=refs/remotes/origin/staging
             echo "commit-size: promotion into $COMMIT_SIZE_BASE_REF: commits already on origin/staging are skipped"
           fi
@@ -218,11 +247,14 @@ jobs:
             count=$((count + 1))
             subject=$(git log -1 --format=%s "$c")
             short=$(git rev-parse --short "$c")
-            diff_of "$c" > "$tmp/d"
+            rc=0; diff_of "$c" > "$tmp/d" || rc=$?
+            if [ "$rc" -eq 3 ]; then
+              echo "[FAIL] $short $subject: octopus merges are not supported; merge the branches one at a time"; status=1; continue
+            elif [ "$rc" -ne 0 ]; then fail "could not diff commit $short"; fi
             if [ "$(tr -cd '\n' < "$tmp/d" | wc -c)" -gt 0 ]; then
               echo "[FAIL] $short $subject: a changed path contains a newline; rename it"; status=1; continue
             fi
-            tr '\0' '\n' < "$tmp/d" | classify > "$tmp/rows"
+            tr '\0' '\n' < "$tmp/d" | classify | resolve_locks "$c" > "$tmp/rows"
             read -r n skipped tabs < <(tally)
             if [ "$tabs" -gt 0 ]; then
               echo "[FAIL] $short $subject: $tabs changed path(s) contain a tab; rename them"; status=1; continue

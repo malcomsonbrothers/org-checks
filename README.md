@@ -159,21 +159,26 @@ not the pull request total, so a promotion pull request made of reviewable
 slices passes while a squash of the same work fails. A failure names each
 oversized commit, its size and the limit.
 
-- Never counted, at any depth: `Cargo.lock`, `bun.lock`,
-  `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `uv.lock`.
+- Never counted where its manifest sits beside it in the commit (at any
+  depth): `Cargo.lock` (`Cargo.toml`), `bun.lock`, `package-lock.json`,
+  `pnpm-lock.yaml`, `yarn.lock` (`package.json`) and `uv.lock`
+  (`pyproject.toml`). A lockfile name without its manifest counts.
 - A file renamed out of an exempt path into a counted one counts in full.
 - Binaries are what git calls binary (a NUL byte in the first 8,000 bytes)
   with the pull request's `.gitattributes` ignored, so attributes cannot
-  hide text. A binary `png jpg jpeg gif webp ico woff woff2 ttf otf pdf mp4
-  webm wasm` file is exempt; any other binary counts the larger of its
-  lines and one line per 40 bytes. Deleting a binary counts nothing.
+  hide text. A binary `png jpg jpeg gif webp avif ico woff woff2 ttf otf
+  pdf mp4 webm wasm jar so zip gz tar` file is exempt; any other binary
+  counts the larger of its lines and one line per 40 bytes. Deleting a
+  binary, or renaming it unchanged, counts nothing.
 - A merge commit counts what it adds beyond an automatic merge of its
   parents (`git show --remerge-diff`): a clean merge counts nothing, a
-  conflict resolution or extra change counts.
+  conflict resolution or extra change counts. Octopus merges (three or
+  more parents) fail; merge the branches one at a time.
 - A changed path containing a newline or a tab fails the commit.
-- Promotions: in a pull request into the default branch, when the
-  repository has a `staging` branch, commits already on `origin/staging`
-  are skipped, because they passed this check on their way into staging.
+- Promotions: in a pull request from the repository's own `staging`
+  branch (not a fork's) into the default branch, commits already on
+  `origin/staging` are skipped, because they passed this check on their
+  way into staging.
 - If the base branch is force-pushed while a pull request is open, commits
   that left the base become part of base..head and are measured again;
   rebase the pull request onto the new base.

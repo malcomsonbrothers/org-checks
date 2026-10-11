@@ -7,7 +7,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_COMMITTER_NAME=t \
   GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_EMAIL=t@example.com
-unset COMMIT_SIZE_EXCEPTION COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_BASE_REF
+unset COMMIT_SIZE_EXCEPTION COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_BASE_REF COMMIT_SIZE_HEAD_REF \
+  COMMIT_SIZE_HEAD_REPO COMMIT_SIZE_REPO
 passed=0 failed=0 zero=0000000000000000000000000000000000000000
 
 repo() { # fresh repo with one small commit on master, work continuing on branch pr
@@ -45,13 +46,19 @@ check master; expect "two 600-line commits pass" 0 '2 commit(s) checked'
 repo squash; lines 600 a.rs; lines 600 b.rs; save squashed
 check master; expect "the same change squashed fails" 1 'squashed: 1200 changed lines'
 
-# Lockfiles at any depth never count; other files in the same commit still do.
-repo locks; for f in Cargo.lock bun.lock package-lock.json pnpm-lock.yaml yarn.lock uv.lock; do
+# Lockfiles beside their manifest never count; other files in the same commit still do.
+repo locks; mkdir web && touch Cargo.toml web/Cargo.toml web/package.json web/pyproject.toml; for f in Cargo.lock bun.lock package-lock.json pnpm-lock.yaml yarn.lock uv.lock; do
   lines 3000 "web/$f"; done; lines 3000 Cargo.lock; save "chore(deps): bump"
 check master; expect "lockfile-only commit passes" 0 '0 changed lines (+21000 exempt)'
 lines 3001 Cargo.lock; lines 1001 src.rs; save "feat: code with a lockfile"
 check master; expect "lockfiles do not hide code" 1 'code with a lockfile: 1001 changed lines (+'
 lines 1001 Cargo.lock.rs; save; check HEAD~1; expect "only the exact lockfile names" 1 '1001 changed lines'
+lines 1001 src/gen/Cargo.lock; save "feat: hidden lock"; check HEAD~1
+expect "a lockfile without its manifest counts" 1 'hidden lock: 1001 changed lines'
+git rm -q -r src Cargo.lock.rs; save; git rm -q web/yarn.lock; save "chore: drop yarn"; check HEAD~1
+expect "deleting a lockfile beside its manifest is exempt" 0 '0 changed lines (+3000 exempt): chore: drop yarn'
+cfg 'exempt gen/**'; lines 1500 gen/x.rs; save; mkdir lib && git mv gen/x.rs lib/Cargo.lock; save "feat: move to lock"
+check HEAD~1; expect "renamed out of an exempt path into a bare lockfile counts in full" 1 'move to lock: 1500 changed lines'
 
 # .commit-size exempts generated or vendored paths; it is read at TIP.
 repo exempt; cfg '# generated' 'exempt gen/**' 'exempt api/*.json'; save cfg
@@ -79,6 +86,9 @@ lines 10 p.rs; save; git merge -q --no-edit master; check master~2 HEAD
 expect "clean merge counts nothing" 0 '4 commit(s) checked'
 git reset -q --hard HEAD~1; git merge -q --no-commit master >/dev/null; lines 1001 evil.rs; save "merge evil"
 check master~2 HEAD; expect "evil merge measured" 1 'merge evil: 1001 changed lines'
+git checkout -q -b o1 master~2; lines 3 o1.rs; save; git checkout -q -b o2 master~2; lines 3 o2.rs; save
+git checkout -q -b o3 master~2; lines 3 o3.rs; save; git merge -q --no-edit o1 o2 >/dev/null; check master~2 HEAD
+expect "an octopus merge fails plainly" 1 'octopus merges are not supported'
 git checkout -q -b back master; git merge -q --no-edit -s ours pr; check pr HEAD
 expect "merge with a parent's tree counts nothing" 0 '0 changed lines'
 
@@ -99,6 +109,12 @@ repo nul; { printf '\0'; body 1001 x; } > a.rs; save "feat: nul"
 check master; expect "a NUL byte cannot hide lines" 1 'nul: 1001 changed lines'
 head -c 300000 /dev/urandom > blob.bin; save "chore: blob"; check HEAD~1
 expect "a real unlisted binary counts a line per 40 bytes" 1 'blob: 7500 changed lines'
+git mv blob.bin moved.bin; save "chore: move blob"; check HEAD~1
+expect "an unchanged binary rename counts 0" 0 '0 changed lines: chore: move blob'
+git mv moved.bin again.bin; head -c 10 /dev/urandom >> again.bin; save "chore: move and edit"; check HEAD~1
+expect "a binary renamed with edits counts" 1 'move and edit: 7501 changed lines'
+{ printf 'PK\0'; head -c 300000 /dev/urandom; } > bundle.zip; save "chore: zip"; check HEAD~1
+expect "zip is a listed format" 0 '(+7501 exempt): chore: zip'
 { printf '\211PNG\0'; head -c 300000 /dev/urandom; } > logo.png; save "chore: logo"; check HEAD~1
 expect "a real binary of a listed format is exempt" 0 '0 changed lines (+7501 exempt): chore: logo'
 lines 1001 fake.png; save "feat: fake png"; check HEAD~1
@@ -113,10 +129,16 @@ check master; expect "a path with a tab fails" 1 'tab: 1 changed path(s) contain
 # Promotions into the default branch skip commits already on origin/staging (fix 5).
 repo promo; lines 1001 a.rs; save "feat: big on staging"; git update-ref refs/remotes/origin/staging HEAD
 lines 10 b.rs; save "feat: new"
-COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_DEFAULT_BRANCH=master check --ci master HEAD
+export COMMIT_SIZE_DEFAULT_BRANCH=master COMMIT_SIZE_REPO=o/r
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
 expect "promotion skips commits on staging" 0 '1 commit(s) checked'
-COMMIT_SIZE_BASE_REF=staging COMMIT_SIZE_DEFAULT_BRANCH=master check --ci master HEAD
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=feature COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+expect "only a head branch named staging skips" 1 'big on staging: 1001'
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=staging COMMIT_SIZE_HEAD_REPO=fork/r check --ci master HEAD
+expect "a fork's staging branch does not skip" 1 'big on staging: 1001'
+COMMIT_SIZE_BASE_REF=staging COMMIT_SIZE_HEAD_REF=staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
 expect "only promotions into the default branch skip" 1 'big on staging: 1001'
+unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
 # BASE: zero falls back to the merge-base with the default branch; a root commit is measured.
 repo fallback; lines 1001 a.rs; save big; git update-ref refs/remotes/origin/master master
@@ -130,8 +152,8 @@ check --bogus; expect "unknown flag fails" 2 'usage'
 # The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/commit-size.yml"
 # shellcheck disable=SC2016 # literal $PR_BASE and $PR_HEAD in the workflow
-run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, metal\]$|fetch-depth: 0$|persist-credentials: false$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
-[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 7 ] && rc=0 || rc=1
+run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, metal\]$|fetch-depth: 0$|persist-credentials: false$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
+[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 10 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, full history, self-hosted runner, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$wf"; expect "no GitHub-hosted runner" 1
 run grep -n -E 'filter:' "$wf"; expect "no partial clone, which would need the job token" 1
