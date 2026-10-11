@@ -7,21 +7,21 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_COMMITTER_NAME=t \
   GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_EMAIL=t@example.com
-unset COMMIT_SIZE_EXCEPTION COMMIT_SIZE_DEFAULT_BRANCH
+unset COMMIT_SIZE_EXCEPTION COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_BASE_REF
 passed=0 failed=0 zero=0000000000000000000000000000000000000000
 
 repo() { # fresh repo with one small commit on master, work continuing on branch pr
   cd "$work" && rm -rf "$1" && git init -q -b master "$1" && cd "$1"
   echo init > README && save init && git checkout -q -b pr
 }
-body() { awk -v n="$1" -v t="${3:-x}" 'BEGIN { for (i = 1; i <= n; i++) print t i }'; }
-lines() { mkdir -p "$(dirname "$2")"; body "$1" "$2" "${3:-x}" > "$2"; }
+body() { awk -v n="$1" -v t="${2:-x}" 'BEGIN { for (i = 1; i <= n; i++) print t i }'; }
+lines() { mkdir -p "$(dirname "$2")"; body "$1" "${3:-x}" > "$2"; }
 cfg() { printf '%s\n' "$@" > .commit-size; }
 save() { git add -A && git commit -q -m "${1:-c}"; }
 run() { out=$("$@" 2>&1) && rc=0 || rc=$?; }
 check() { run "$here/scripts/check-commit-size.sh" "$@"; }
 expect() { # expect NAME RC [PATTERN that must appear in the output]
-  if [ "$rc" = "$2" ] && { [ -z "${3:-}" ] || printf '%s\n' "$out" | grep -q -e "$3"; }; then
+  if [ "$rc" = "$2" ] && { [ -z "${3:-}" ] || grep -q -e "$3" <<<"$out"; }; then
     passed=$((passed + 1))
   else
     failed=$((failed + 1)); echo "not ok: $1 (exit $rc, wanted $2${3:+, /$3/})"; printf '%s\n' "$out" | sed 's/^/    /'
@@ -73,13 +73,50 @@ repo label; lines 1500 a.rs; save big
 COMMIT_SIZE_EXCEPTION=true check --ci master HEAD; expect "label allows an oversized commit" 0 'allowed by the commit-size-exception label: [0-9a-f]* big'
 COMMIT_SIZE_EXCEPTION=false check --ci master HEAD; expect "only true counts" 1 'commit-size-exception label on the pull request, then closing and reopening'
 
-# Merge commits are skipped; renames count only their edits; binaries count nothing.
+# Merges count only what they add beyond an automatic merge; a clean one counts nothing.
 repo merges; git checkout -q master; lines 900 m1.rs; save; lines 900 m2.rs; save; git checkout -q pr
 lines 10 p.rs; save; git merge -q --no-edit master; check master~2 HEAD
-expect "merge commit skipped" 0 '3 commit(s) checked'
+expect "clean merge counts nothing" 0 '4 commit(s) checked'
+git reset -q --hard HEAD~1; git merge -q --no-commit master >/dev/null; lines 1001 evil.rs; save "merge evil"
+check master~2 HEAD; expect "evil merge measured" 1 'merge evil: 1001 changed lines'
+git checkout -q -b back master; git merge -q --no-edit -s ours pr; check pr HEAD
+expect "merge with a parent's tree counts nothing" 0 '0 changed lines'
+
+# Renames count only their edits, unless they leave an exempt path (fix 1).
 repo renames; lines 2000 a.rs; git add -A && git commit -q -m add; git mv a.rs b.rs; save "refactor: move"
 check HEAD~1; expect "a pure rename is 0 lines" 0 '0 changed lines: refactor: move'
-head -c 300000 /dev/urandom > blob.bin; save bin; check HEAD~1; expect "binary changes count 0" 0 '0 changed lines: bin'
+repo unlock; lines 5000 src/Cargo.lock; cfg 'exempt gen/**'; lines 3000 gen/x.rs; save; git branch -q base
+git mv src/Cargo.lock src/main.rs; git mv gen/x.rs lib.rs; save "feat: launder"
+check base; expect "rename out of an exempt path counts the whole file" 1 'launder: 8000 changed lines'
+git reset -q --hard base; git mv src/Cargo.lock gen/Cargo.lock; git mv gen/x.rs gen/y.rs; save "chore: move generated"
+check base; expect "rename within exempt paths stays exempt" 0 '0 changed lines: chore: move generated'
+
+# Binaries (fix 2): .gitattributes and NUL bytes cannot hide text; real binaries count by size
+# unless they are a listed format.
+repo binary; printf '* -diff\n' > .gitattributes; lines 1001 a.rs; save "feat: hidden"
+check master; expect ".gitattributes -diff cannot hide lines" 1 'hidden: 1002 changed lines'
+repo nul; { printf '\0'; body 1001 x; } > a.rs; save "feat: nul"
+check master; expect "a NUL byte cannot hide lines" 1 'nul: 1001 changed lines'
+head -c 300000 /dev/urandom > blob.bin; save "chore: blob"; check HEAD~1
+expect "a real unlisted binary counts a line per 40 bytes" 1 'blob: 7500 changed lines'
+{ printf '\211PNG\0'; head -c 300000 /dev/urandom; } > logo.png; save "chore: logo"; check HEAD~1
+expect "a real binary of a listed format is exempt" 0 '0 changed lines (+7501 exempt): chore: logo'
+lines 1001 fake.png; save "feat: fake png"; check HEAD~1
+expect "a listed extension with text content counts" 1 'fake png: 1001 changed lines'
+
+# Paths with a newline or tab fail (fix 3): they could steal a lockfile's exemption.
+repo newline; lines 5 "$(printf 'a\nCargo.lock')"; lines 1001 b.rs; save "feat: newline"
+check master; expect "a path with a newline fails" 1 'newline: a changed path contains a newline'
+repo tab; lines 5 "$(printf 'a\tb.rs')"; save "feat: tab"
+check master; expect "a path with a tab fails" 1 'tab: 1 changed path(s) contain a tab'
+
+# Promotions into the default branch skip commits already on origin/staging (fix 5).
+repo promo; lines 1001 a.rs; save "feat: big on staging"; git update-ref refs/remotes/origin/staging HEAD
+lines 10 b.rs; save "feat: new"
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_DEFAULT_BRANCH=master check --ci master HEAD
+expect "promotion skips commits on staging" 0 '1 commit(s) checked'
+COMMIT_SIZE_BASE_REF=staging COMMIT_SIZE_DEFAULT_BRANCH=master check --ci master HEAD
+expect "only promotions into the default branch skip" 1 'big on staging: 1001'
 
 # BASE: zero falls back to the merge-base with the default branch; a root commit is measured.
 repo fallback; lines 1001 a.rs; save big; git update-ref refs/remotes/origin/master master
@@ -92,8 +129,9 @@ check --bogus; expect "unknown flag fails" 2 'usage'
 
 # The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/commit-size.yml"
-run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, metal\]$|fetch-depth: 0$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
-[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 5 ] && rc=0 || rc=1
+# shellcheck disable=SC2016 # literal $PR_BASE and $PR_HEAD in the workflow
+run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, metal\]$|fetch-depth: 0$|filter: blob:none$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
+[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 7 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, full history, self-hosted runner, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$wf"; expect "no GitHub-hosted runner" 1
 

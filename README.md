@@ -152,14 +152,35 @@ Candidate required workflow: `.github/workflows/commit-size.yml`. It is not
 in any ruleset yet. Like the file length check it runs on our self-hosted
 Linux runners (`[self-hosted, Linux, metal]`) and always enforces.
 
-It refuses commits too large to review. Every non-merge commit in the pull
-request (base..head) may change at most 1,000 lines: additions plus
-deletions, with renames detected so a pure move counts nothing and binary
-files count nothing. Each commit is measured, not the pull request total,
-so a promotion pull request made of reviewable slices passes while a squash
-of the same work fails. A failure names each oversized commit, its size and
-the limit. These never count, at any depth: `Cargo.lock`, `bun.lock`,
-`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `uv.lock`.
+It refuses commits too large to review. Every commit in the pull request
+(base..head) may change at most 1,000 lines: additions plus deletions, with
+renames detected so a pure move counts nothing. Each commit is measured,
+not the pull request total, so a promotion pull request made of reviewable
+slices passes while a squash of the same work fails. A failure names each
+oversized commit, its size and the limit.
+
+- Never counted, at any depth: `Cargo.lock`, `bun.lock`,
+  `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `uv.lock`.
+- A file renamed out of an exempt path into a counted one counts in full.
+- Binaries are what git calls binary (a NUL byte in the first 8,000 bytes)
+  with the pull request's `.gitattributes` ignored, so attributes cannot
+  hide text. A binary `png jpg jpeg gif webp ico woff woff2 ttf otf pdf mp4
+  webm wasm` file is exempt; any other binary counts the larger of its
+  lines and one line per 40 bytes. Deleting a binary counts nothing.
+- A merge commit counts what it adds beyond an automatic merge of its
+  parents (`git show --remerge-diff`): a clean merge counts nothing, a
+  conflict resolution or extra change counts.
+- A changed path containing a newline or a tab fails the commit.
+- Promotions: in a pull request into the default branch, when the
+  repository has a `staging` branch, commits already on `origin/staging`
+  are skipped, because they passed this check on their way into staging.
+- If the base branch is force-pushed while a pull request is open, commits
+  that left the base become part of base..head and are measured again;
+  rebase the pull request onto the new base.
+
+The job checks out with `fetch-depth: 0` and `filter: blob:none` (blobs
+are fetched as the diffs need them), so it keeps the read-only job token in
+the clone; it runs nothing from the pull request, only git.
 
 ### `.commit-size`
 
