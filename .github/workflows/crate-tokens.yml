@@ -48,6 +48,8 @@ jobs:
           persist-credentials: false
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
 
       - name: Check crate and package token budgets
         env:
@@ -109,7 +111,10 @@ jobs:
           }
           API_SPEC = re.compile(r"(openapi|swagger)[^/]*\.(json|ya?ml)\Z", re.IGNORECASE)
           GENERATED_MARK = re.compile(rb"@generated|DO NOT EDIT")
-          PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?$", re.MULTILINE)
+          PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?\r?$", re.MULTILINE)
+          # Control characters in a unit path print as \xNN escapes, so a directory name cannot start
+          # a new output line (and with it a "::" workflow command).
+          CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
           GRANDFATHER = """\
@@ -224,6 +229,10 @@ jobs:
               return units
 
 
+          def escape(path):
+              return CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", path)
+
+
           def owner(path, units):
               d = path
               while "/" in d:
@@ -259,7 +268,7 @@ jobs:
                   for u, toks in zip(owners, enc.encode_ordinary_batch(texts)):
                       counts[u][0] += len(toks)
                       counts[u][1] += 1
-              return {u: ((raw * 3 + 1) // 2, files) for u, (raw, files) in counts.items()}
+              return {escape(u): ((raw * 3 + 1) // 2, files) for u, (raw, files) in counts.items()}
 
 
           def default_branch():
@@ -298,6 +307,8 @@ jobs:
 
 
           def main(argv):
+              for stream in (sys.stdout, sys.stderr):  # non-UTF-8 paths print as escapes, not a crash
+                  stream.reconfigure(errors="backslashreplace")
               mode = argv[0] if argv else "all"
               if mode not in ("all", "--report", "--print-baseline", "--ci") or (mode == "--ci") != (len(argv) == 2) \
                       or (mode != "--ci" and len(argv) > 1):
@@ -363,8 +374,14 @@ jobs:
           if __name__ == "__main__":
               sys.exit(main(sys.argv[1:]))
           ENGINE
-          status=0
-          out=$(uv run --no-config --quiet --script "$engine" --ci "$PR_BASE" 2>&1) || status=$?
+          for attempt in 1 2; do
+            status=0
+            out=$(uv run --no-config --quiet --script "$engine" --ci "$PR_BASE" 2>&1) || status=$?
+            # 0 passes and 1 is a real violation; anything else (a uv or network hiccup) is
+            # not a verdict, so it gets one retry.
+            if [ "$status" -le 1 ] || [ "$attempt" -eq 2 ]; then break; fi
+            printf '%s\n' "$out" "crate-tokens: exit $status, not a verdict; retrying once"
+          done
           printf '%s\n' "$out"
           printf '%s\n' "$out" | sed -n -e 's/%/%25/g' \
             -e "s/^\[FAIL\] \([^:]*\): \(.*\)$/::error title=crate-tokens::\1: \2/p"

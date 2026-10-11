@@ -49,7 +49,10 @@ SKIP_DIRS = {
 }
 API_SPEC = re.compile(r"(openapi|swagger)[^/]*\.(json|ya?ml)\Z", re.IGNORECASE)
 GENERATED_MARK = re.compile(rb"@generated|DO NOT EDIT")
-PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?$", re.MULTILINE)
+PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?\r?$", re.MULTILINE)
+# Control characters in a unit path print as \xNN escapes, so a directory name cannot start
+# a new output line (and with it a "::" workflow command).
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 GRANDFATHER = """\
@@ -164,6 +167,10 @@ def discover(paths):
     return units
 
 
+def escape(path):
+    return CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", path)
+
+
 def owner(path, units):
     d = path
     while "/" in d:
@@ -199,7 +206,7 @@ def measure(exempt):
         for u, toks in zip(owners, enc.encode_ordinary_batch(texts)):
             counts[u][0] += len(toks)
             counts[u][1] += 1
-    return {u: ((raw * 3 + 1) // 2, files) for u, (raw, files) in counts.items()}
+    return {escape(u): ((raw * 3 + 1) // 2, files) for u, (raw, files) in counts.items()}
 
 
 def default_branch():
@@ -238,6 +245,8 @@ def compare_base(base, exempt, rows):
 
 
 def main(argv):
+    for stream in (sys.stdout, sys.stderr):  # non-UTF-8 paths print as escapes, not a crash
+        stream.reconfigure(errors="backslashreplace")
     mode = argv[0] if argv else "all"
     if mode not in ("all", "--report", "--print-baseline", "--ci") or (mode == "--ci") != (len(argv) == 2) \
             or (mode != "--ci" and len(argv) > 1):
