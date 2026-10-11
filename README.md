@@ -123,8 +123,10 @@ reopens it.
 
 ### Fixing a pull request that fails on units that were already too big
 
-With [uv](https://docs.astral.sh/uv/) installed, run this at the repository
-root and commit `.crate-tokens`:
+With [uv](https://docs.astral.sh/uv/) installed, run this at the root of a
+clean checkout of the pull request branch (the check also counts untracked,
+non-ignored files, so stray local files would inflate the rows) and commit
+`.crate-tokens`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |

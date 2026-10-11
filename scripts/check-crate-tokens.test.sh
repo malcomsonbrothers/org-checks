@@ -49,7 +49,17 @@ pkg pnpm-root && printf 'packages: ["*"]\n' > pnpm-root/pnpm-workspace.yaml
 mkdir -p notes && printf 'not a unit\n' > notes/a.md
 save
 same "discovers packages only" "$(units)" "crates/a crates/b web/app "
+printf '[package]  # crlf\r\nname = "c"\r\n' > Cargo.toml; mkdir -p crlf && printf '[package]\r\nname = "d"\r\n' > crlf/Cargo.toml
+same "CRLF manifests are packages" "$(units)" ". crates/a crates/b crlf web/app "
 check; expect "small units pass" 0 'checked, each within its budget'
+
+# Control characters in a unit path are escaped, so they cannot inject "::" workflow commands;
+# non-UTF-8 paths do not crash the check.
+repo hostile; evil=$'evil\n::error title=x::injected'; crate "$evil"; big "$evil/src/lib.rs"
+crate $'raw\xff'; small $'raw\xff/src/lib.rs'; save
+check; expect "control characters are escaped" 1 '^\[FAIL\] evil\\x0a::error title=x::injected: [0-9]* tokens'
+printf '%s\n' "$out" | grep -q '^::' && expect "no output line starts a workflow command" x
+check --report; expect "a non-UTF-8 path does not crash" 0 'raw\\udcff$'
 
 # A repository whose root is a package is the unit ".", and nested units own their files.
 repo nested; pkg .; crate tools/gen; big tools/gen/src/main.rs; small src/index.ts; save
