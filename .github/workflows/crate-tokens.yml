@@ -79,7 +79,8 @@ jobs:
           #                                          CRATE_TOKENS_EXCEPTION=true (the PR label)
           # An all-zero or missing BASE falls back to the merge-base with the default branch
           # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
-          # Run with: uv run --script scripts/check-crate-tokens.py [mode]
+          # Run with: uv run --script scripts/check-crate-tokens.py [mode], or through
+          # scripts/check-crate-tokens.sh, which also works piped from curl (see GRANDFATHER).
           # .crate-tokens lines (# starts a comment):
           #   exempt <glob>              generated or vendored paths; * is one path segment,
           #                              ** any depth, ? one character, the rest literal
@@ -109,6 +110,15 @@ jobs:
           API_SPEC = re.compile(r"(openapi|swagger)[^/]*\.(json|ya?ml)\Z", re.IGNORECASE)
           GENERATED_MARK = re.compile(rb"@generated|DO NOT EDIT")
           PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?$", re.MULTILINE)
+
+
+          GRANDFATHER = """\
+          crate-tokens: to grandfather units that were already over the limit, run this at the
+          repository root (it needs uv), then commit .crate-tokens:
+              curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |
+                bash -s -- --print-baseline >> .crate-tokens
+          The pull request that adds baseline rows needs the crate-tokens-exception label; after adding
+          it, close and reopen the pull request so the check re-runs."""
 
 
           class ConfigError(Exception):
@@ -344,6 +354,7 @@ jobs:
               if bad:
                   print(f"crate-tokens: {bad} failure(s); limit {LIMIT} Claude tokens (o200k_base x 1.5) per"
                         " unit; see --report")
+                  print(GRANDFATHER)
                   return 1
               print(f"crate-tokens: {len(counts)} unit(s) checked, each within its budget")
               return 0
@@ -361,9 +372,13 @@ jobs:
             echo "## Crate tokens"
             if [ "$status" -eq 0 ]; then echo "Every crate and package is within its budget."; else
               echo "Violations (exit $status). For units that were already over the limit, run this at the"
-              echo "repository root, commit .crate-tokens and label the pull request crate-tokens-exception,"
-              echo "then close and reopen the pull request to re-run this check (see the malcomsonbrothers/org-checks README):"
-              printf '\n    %s\n\n' 'uv run --script check-crate-tokens.py --print-baseline >> .crate-tokens'
+              echo "repository root (it needs uv), commit .crate-tokens and label the pull request"
+              echo "crate-tokens-exception, then close and reopen the pull request to re-run this check"
+              echo "(see the malcomsonbrothers/org-checks README):"
+              echo
+              echo '    curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |'
+              echo '      bash -s -- --print-baseline >> .crate-tokens'
+              echo
             fi
             echo '```'
             printf '%s\n' "$out"

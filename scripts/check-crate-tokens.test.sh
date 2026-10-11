@@ -115,6 +115,13 @@ check --print-baseline; expect "print-baseline exits 0" 0
 same "print-baseline rows" "$(printf '%s\n' "$out" | awk '{ print $1, $2 }' | tr '\n' ' ')" "baseline a baseline web "
 uv run --no-config --quiet --script "$here/scripts/check-crate-tokens.py" --print-baseline >> .crate-tokens
 check; expect "appending the rows makes the tree pass" 0
+git rm -q --cached .crate-tokens >/dev/null 2>&1 || :; rm .crate-tokens
+check; expect "failure output names the one-liner" 1 'scripts/check-crate-tokens.sh |$'
+printf '%s\n' "$out" | grep -q 'needs the crate-tokens-exception label' || expect "failure output names the label" x
+run env CRATE_TOKENS_ENGINE="$here/scripts/check-crate-tokens.py" bash -s -- --print-baseline \
+  < "$here/scripts/check-crate-tokens.sh"
+expect "the wrapper works piped into bash" 0 '^baseline a [0-9]*$'
+run "$here/scripts/check-crate-tokens.sh" --report; expect "the wrapper runs the engine beside it" 0 'tokens  files  unit'
 cfg 'nonsense'; check --print-baseline; expect "config errors fail print-baseline" 1 'unknown or malformed'
 cfg; check --report; expect "report lists units" 0 '^  tokens  files  unit$'
 check --bogus; expect "unknown mode" 2 usage
