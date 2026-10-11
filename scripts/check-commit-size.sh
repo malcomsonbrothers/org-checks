@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Org-wide per-commit size limit. Needs only bash, git and awk. Every non-merge commit in
+# BASE..TIP may change at most 1,000 lines (additions plus deletions, renames detected),
+# not counting lockfiles or paths the repo exempts in .commit-size. Never skips.
+#   check-commit-size.sh [BASE [TIP]]   commits in BASE..TIP (TIP defaults to HEAD)
+#   check-commit-size.sh --ci BASE TIP  the same, and .commit-size may not add exempt lines
+#                                       compared with BASE. COMMIT_SIZE_EXCEPTION=true (the
+#                                       PR label) allows oversized commits and new lines.
+# An all-zero or missing BASE falls back to the merge-base with the default branch
+# (COMMIT_SIZE_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master); with
+# none, every commit reachable from TIP is checked.
+# .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
+# Globs: * is one path segment, ** any depth; other characters are literal.
+set -euo pipefail
+export LC_ALL=C
+
+# Org limit and the lockfiles never counted, at any depth. No repository can change them.
+limit=1000
+lockfiles="Cargo.lock bun.lock package-lock.json pnpm-lock.yaml yarn.lock uv.lock"
+
+cd "$(git rev-parse --show-toplevel)"
+config=.commit-size
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+fail() { echo "commit-size: $*" >&2; exit 2; }
+is_zero() { case ${1:-0} in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+default_branch() {
+  local b d=${COMMIT_SIZE_DEFAULT_BRANCH:-}
+  for b in ${d:+"origin/$d" "$d"} "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || :)" \
+    origin/main origin/master; do
+    [ -n "$b" ] && git rev-parse -q --verify "$b^{commit}" >/dev/null && { echo "$b"; return; }
+  done
+  return 0
+}
+
+# Prints the merge-base of TIP with the default branch, or nothing (check every commit).
+fallback_base() {
+  local d
+  d=$(default_branch)
+  [ -n "$d" ] && git merge-base "$1" "$d" 2>/dev/null || true
+}
+
+# Turns the org lockfiles plus a .commit-size text (stdin) into rule records:
+#   D regex glob (org lockfile) | E regex glob (repo exempt) | X error
+parse_rules() {
+  awk -v locks="$lockfiles" -v cfg="$1" '
+    function glob_re(g,   r, c, i) {
+      r = ""
+      for (i = 1; i <= length(g); i++) {
+        c = substr(g, i, 1)
+        if (c == "*" && substr(g, i, 3) == "**/") { r = r "(.*/)?"; i += 2 }
+        else if (c == "*" && substr(g, i, 2) == "**") { r = r ".*"; i++ }
+        else if (c == "*") r = r "[^/]*"
+        else if (c == "?") r = r "[^/]"
+        else if (index("\\.[]()+{}|^$", c)) r = r "\\" c
+        else r = r c
+      }
+      return "^" r "$"
+    }
+    BEGIN { n = split(locks, l, " "); for (i = 1; i <= n; i++) print "D " glob_re("**/" l[i]) " " l[i] }
+    { sub(/\r$/, "") }
+    /^[ \t]*(#|$)/ { next }
+    $1 == "exempt" && NF == 2 { print "E " glob_re($2) " " $2; next }
+    { print "X " cfg ":" NR ": unknown or malformed line (only exempt <glob> is allowed): " $0 }'
+}
+
+# Reads "git diff-tree -z --numstat" output turned into lines on stdin and prints
+# "<counted> <exempt>" changed lines. A rename prints "add<TAB>del<TAB>" then old and new path.
+measure() {
+  awk -v rules="$tmp/rules" '
+    BEGIN { while ((getline r < rules) > 0) { split(r, w, " "); if (w[1] == "D" || w[1] == "E") ex[w[2]] = 1 } }
+    function add(p, n,   re) { for (re in ex) if (p ~ re) { skipped += n; return } counted += n }
+    pend == 2 { pend = 1; next }
+    pend == 1 { pend = 0; add($0, n); next }
+    { split($0, f, "\t"); n = f[1] + f[2]; p = $0; sub(/^[^\t]*\t[^\t]*\t/, "", p)
+      if (p == "") pend = 2; else add(p, n) }
+    END { print counted + 0, skipped + 0 }'
+}
+
+ci=0
+if [ "${1:-}" = --ci ]; then ci=1; shift; fi
+case ${1:-} in -*) fail "usage: check-commit-size.sh [--ci] [BASE [TIP]]" ;; esac
+[ $# -le 2 ] || fail "usage: check-commit-size.sh [--ci] [BASE [TIP]]"
+tip=$(git rev-parse -q --verify "${2:-HEAD}^{commit}") || fail "unknown commit ${2:-HEAD}"
+base=${1:-}
+if is_zero "$base"; then base=$(fallback_base "$tip")
+elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+  fail "base commit $base is not in this clone; fetch it (in CI, check out with fetch-depth: 0)"
+fi
+
+git show "$tip:$config" 2>/dev/null > "$tmp/cfg" || : > "$tmp/cfg"
+parse_rules "$tip:$config" < "$tmp/cfg" > "$tmp/rules"
+
+status=0
+if grep -q '^X ' "$tmp/rules"; then sed -n 's/^X /[FAIL] /p' "$tmp/rules"; status=1; fi
+
+# Measure each commit against its first parent (the empty tree for a root commit).
+git rev-list --no-merges --reverse ${base:+"^$base"} "$tip" > "$tmp/commits"
+over=0 count=0
+while IFS= read -r c; do
+  count=$((count + 1))
+  read -r n skipped < <(git diff-tree -r --root -M --numstat -z --no-commit-id "$c" | tr '\0' '\n' | measure)
+  subject=$(git log -1 --format=%s "$c")
+  short=$(git rev-parse --short "$c")
+  note=""; [ "$skipped" -eq 0 ] || note=" (+$skipped exempt)"
+  if [ "$n" -le "$limit" ]; then
+    echo "commit-size: $short $n changed lines$note: $subject"
+  elif [ "${COMMIT_SIZE_EXCEPTION:-}" = true ]; then
+    echo "commit-size: allowed by the commit-size-exception label: $short $subject: $n changed lines, limit $limit"
+  else
+    echo "[FAIL] $short $subject: $n changed lines$note, limit $limit (split it into smaller commits)"
+    over=$((over + 1)); status=1
+  fi
+done < "$tmp/commits"
+echo "commit-size: $count commit(s) checked, merge commits skipped"
+if [ "$over" -gt 0 ]; then
+  echo "commit-size: $over commit(s) over $limit changed lines. Split each into reviewable commits" \
+    "(git rebase -i, then edit and git reset HEAD~ to re-commit it in parts). Generated or vendored" \
+    "paths go in .commit-size as exempt <glob>. A reviewer can allow it instead by putting the" \
+    "commit-size-exception label on the pull request, then closing and reopening it."
+fi
+
+# CI: .commit-size may only shrink compared with BASE.
+if [ "$ci" -eq 1 ]; then
+  if [ -n "$base" ]; then git show "$base:$config" 2>/dev/null || true; fi |
+    parse_rules "$base:$config" | grep '^E ' > "$tmp/old-rules" || true
+  awk 'FILENAME == ARGV[1] { old[$2] = 1; next } $1 == "E" && !($2 in old) { print "new exempt line " $3 }' \
+    "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
+  if [ -s "$tmp/added" ]; then
+    if [ "${COMMIT_SIZE_EXCEPTION:-}" = true ]; then
+      sed 's/^/commit-size: allowed by the commit-size-exception label: /' "$tmp/added"
+    else
+      sed 's/^/[FAIL] .commit-size: /' "$tmp/added"
+      echo "commit-size: .commit-size may only shrink. A reviewer allows an addition by" \
+        "putting the commit-size-exception label on the pull request, then closing and reopening it."
+      status=1
+    fi
+  fi
+fi
+
+[ "$status" -eq 0 ] && echo "commit-size: ok" || echo "commit-size: see .commit-size and scripts/check-commit-size.sh"
+exit "$status"
