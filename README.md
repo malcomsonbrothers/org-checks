@@ -124,19 +124,25 @@ reopens it.
 ### Fixing a pull request that fails on units that were already too big
 
 With [uv](https://docs.astral.sh/uv/) installed, run this at the repository
-root, commit `.crate-tokens`, and ask a reviewer to label the pull request
-`crate-tokens-exception`, then close and reopen it:
+root and commit `.crate-tokens`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.py \
-  -o /tmp/check-crate-tokens.py
-uv run --script /tmp/check-crate-tokens.py --print-baseline >> .crate-tokens
+curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |
+  bash -s -- --print-baseline >> .crate-tokens
 ```
+
+The pull request that adds the baseline rows needs the
+`crate-tokens-exception` label: ask a reviewer to add it, then close and
+reopen the pull request so the check re-runs with the label. The check's
+failure output prints the same instructions.
 
 It prints a `baseline <unit> <tokens>` row for every unit over the limit,
 at its current count, including units already in `.crate-tokens`, so
 delete existing `baseline` rows first. Add `exempt` lines before running
 it. `--report` lists every unit's count, largest first.
+`scripts/check-crate-tokens.sh` is a thin wrapper that runs
+`scripts/check-crate-tokens.py` through uv (downloading it from this
+repository's `master` when piped from curl); run either directly in a clone.
 
 ## Pull request titles
 

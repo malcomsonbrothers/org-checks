@@ -19,7 +19,8 @@
 #                                          CRATE_TOKENS_EXCEPTION=true (the PR label)
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
-# Run with: uv run --script scripts/check-crate-tokens.py [mode]
+# Run with: uv run --script scripts/check-crate-tokens.py [mode], or through
+# scripts/check-crate-tokens.sh, which also works piped from curl (see GRANDFATHER).
 # .crate-tokens lines (# starts a comment):
 #   exempt <glob>              generated or vendored paths; * is one path segment,
 #                              ** any depth, ? one character, the rest literal
@@ -49,6 +50,15 @@ SKIP_DIRS = {
 API_SPEC = re.compile(r"(openapi|swagger)[^/]*\.(json|ya?ml)\Z", re.IGNORECASE)
 GENERATED_MARK = re.compile(rb"@generated|DO NOT EDIT")
 PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?$", re.MULTILINE)
+
+
+GRANDFATHER = """\
+crate-tokens: to grandfather units that were already over the limit, run this at the
+repository root (it needs uv), then commit .crate-tokens:
+    curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |
+      bash -s -- --print-baseline >> .crate-tokens
+The pull request that adds baseline rows needs the crate-tokens-exception label; after adding
+it, close and reopen the pull request so the check re-runs."""
 
 
 class ConfigError(Exception):
@@ -284,6 +294,7 @@ def main(argv):
     if bad:
         print(f"crate-tokens: {bad} failure(s); limit {LIMIT} Claude tokens (o200k_base x 1.5) per"
               " unit; see --report")
+        print(GRANDFATHER)
         return 1
     print(f"crate-tokens: {len(counts)} unit(s) checked, each within its budget")
     return 0
