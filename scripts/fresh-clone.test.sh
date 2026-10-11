@@ -73,6 +73,10 @@ expect "file-lengths passes offline, reading the base's .file-lengths" 0
 cd "$work"
 FRESH_CLONE_TOKEN=secret-token run "$clone" "$work/tok" "$url" "+$head:refs/check/head"
 expect "a token is masked in base64" 0 "^::add-mask::$(printf 'x-access-token:secret-token' | base64)$"
+run grep -n -E '(^|[^#]*[[:space:]])env[[:space:]]+"?\$\{?auth|GIT_CONFIG_VALUE_0=[^ ]* +git |-c http\.extra' "$clone"
+expect "the header is never passed in a command line (env VAR=... git, git -c)" 1
+run grep -c -E '^ *export GIT_CONFIG_COUNT=1 |^unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0' "$clone"
+expect "the header is exported for the fetch and unset straight after" 0 '^2$'
 run grep -r -l -e secret-token -e "$(printf 'x-access-token:secret-token' | base64)" "$work/tok/.git"
 expect "no token written to the clone" 1
 

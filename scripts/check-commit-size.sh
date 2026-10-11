@@ -154,7 +154,7 @@ tip=$(git rev-parse -q --verify "${2:-HEAD}^{commit}") || fail "unknown commit $
 base=${1:-}
 if is_zero "$base"; then base=$(fallback_base "$tip")
 elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-  fail "base commit $base is not in this clone; fetch it (in CI, check out with fetch-depth: 0)"
+  fail "base commit $base is not in this clone; fetch it (in CI, the fresh clone fetches the full history of BASE and HEAD)"
 fi
 
 git show "$tip:$config" 2>/dev/null > "$tmp/cfg" || : > "$tmp/cfg"

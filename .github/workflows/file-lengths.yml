@@ -64,8 +64,8 @@ jobs:
           # DEST is removed and created afresh, with origin at URL, then REFSPECs are fetched in one go:
           # never with a filter, with full history unless --depth limits it. --checkout detaches HEAD at
           # COMMIT with its files; without it there is no working tree checkout. FRESH_CLONE_TOKEN, when
-          # set, authenticates that one fetch through an environment-only header, so it is never written
-          # to .git/config or a command line. The runner user's global and system git config are ignored.
+          # set, authenticates that one fetch through a header exported only for it, so it is never
+          # written to .git/config or any process's command line. The runner user's global and system git config are ignored.
           set -euo pipefail
           export LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
           unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
@@ -89,14 +89,18 @@ jobs:
           rm -rf "$dest"
           git init -q "$dest"
           git -C "$dest" remote add origin "$url"
-          auth=()
+          # The header is exported only around the fetch, never passed as an argument: the runners' users
+          # share /proc, where any process's command line is readable but its environment is not.
+          # printf and echo are builtins, so the token is in no command line here either.
           if [ -n "${FRESH_CLONE_TOKEN:-}" ]; then
             basic=$(printf 'x-access-token:%s' "$FRESH_CLONE_TOKEN" | base64 | tr -d '\n')
             echo "::add-mask::$basic"
-            auth=(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic")
+            export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic"
           fi
-          env "${auth[@]}" git -C "$dest" fetch --quiet --no-tags --no-recurse-submodules "${depth[@]}" origin "$@" ||
-            fail "could not fetch $* from $url"
+          fetched=0
+          git -C "$dest" fetch --quiet --no-tags --no-recurse-submodules "${depth[@]}" origin "$@" && fetched=1
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 basic
+          [ "$fetched" -eq 1 ] || fail "could not fetch $* from $url"
           if [ -n "$commit" ]; then git -C "$dest" checkout --quiet --detach "$commit" -- ||
             fail "could not check out $commit"; fi
 
