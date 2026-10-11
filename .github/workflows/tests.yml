@@ -1,7 +1,7 @@
-# Tests for the file length check, its git hooks, the pull request title
-# check and the copies embedded in their workflows. This repository's own
-# file length check is file-lengths.yml, which runs on its pull requests
-# like any other workflow.
+# Tests for the file length check, its git hooks, the crate token check,
+# the pull request title check and the copies embedded in their workflows.
+# This repository's own file length check is file-lengths.yml, which runs
+# on its pull requests like any other workflow.
 # Self-hosted Linux runners on metal-02, never GitHub-hosted runners.
 
 name: Tests
@@ -27,3 +27,10 @@ jobs:
 
       - name: Test the pull request title check
         run: scripts/check-pr-title.test.sh
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Test the crate token check
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.tool_cache }}/tiktoken
+        run: scripts/check-crate-tokens.test.sh
