@@ -130,10 +130,11 @@ check --bogus; expect "unknown flag fails" 2 'usage'
 # The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/commit-size.yml"
 # shellcheck disable=SC2016 # literal $PR_BASE and $PR_HEAD in the workflow
-run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, metal\]$|fetch-depth: 0$|filter: blob:none$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
+run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, metal\]$|fetch-depth: 0$|persist-credentials: false$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 7 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, full history, self-hosted runner, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$wf"; expect "no GitHub-hosted runner" 1
+run grep -n -E 'filter:' "$wf"; expect "no partial clone, which would need the job token" 1
 
 # The required workflow embeds this exact script.
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"

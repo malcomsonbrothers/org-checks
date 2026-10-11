@@ -178,9 +178,9 @@ oversized commit, its size and the limit.
   that left the base become part of base..head and are measured again;
   rebase the pull request onto the new base.
 
-The job checks out with `fetch-depth: 0` and `filter: blob:none` (blobs
-are fetched as the diffs need them), so it keeps the read-only job token in
-the clone; it runs nothing from the pull request, only git.
+The job checks out the full history (`fetch-depth: 0`) with
+`persist-credentials: false`, so no job token stays in `.git/config` on the
+shared self-hosted runner.
 
 ### `.commit-size`
 

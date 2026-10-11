@@ -49,9 +49,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          # Blobs are fetched on demand, so the clone keeps the read-only job
-          # token. The job runs nothing from the pull request, only git.
-          filter: blob:none
+          # A full fetch, so no job token stays in .git/config on the shared
+          # self-hosted runner (a blob-less clone would need it to fetch blobs).
+          persist-credentials: false
 
       - name: Check commit sizes
         env:
