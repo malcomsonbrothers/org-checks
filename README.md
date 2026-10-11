@@ -146,6 +146,46 @@ it. `--report` lists every unit's count, largest first.
 `scripts/check-crate-tokens.py` through uv (downloading it from this
 repository's `master` when piped from curl); run either directly in a clone.
 
+## Commit size
+
+Candidate required workflow: `.github/workflows/commit-size.yml`. It is not
+in any ruleset yet. Like the file length check it runs on our self-hosted
+Linux runners (`[self-hosted, Linux, metal]`) and always enforces.
+
+It refuses commits too large to review. Every non-merge commit in the pull
+request (base..head) may change at most 1,000 lines: additions plus
+deletions, with renames detected so a pure move counts nothing and binary
+files count nothing. Each commit is measured, not the pull request total,
+so a promotion pull request made of reviewable slices passes while a squash
+of the same work fails. A failure names each oversized commit, its size and
+the limit. These never count, at any depth: `Cargo.lock`, `bun.lock`,
+`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `uv.lock`.
+
+### `.commit-size`
+
+Without a `.commit-size` file at the repository root the limit applies with
+only the lockfiles exempt. A repository's `.commit-size`, read at the pull
+request head, may add, one per line (`#` starts a comment):
+
+- `exempt <glob>` for generated or vendored paths, with the same glob
+  syntax as `.file-lengths`
+
+`.commit-size` may only shrink against the pull request base. A new
+`exempt` line fails unless a reviewer adds the `commit-size-exception`
+label to the pull request and then closes and reopens it. The label also
+allows oversized commits, for the rare change that cannot be split.
+
+### Fixing a pull request that fails
+
+Split each named commit (`git rebase -i`, mark it `edit`, then
+`git reset HEAD~` and commit it again in parts), or exempt generated
+paths in `.commit-size`. To check locally before pushing, from a clone
+of this repository or a copy of `scripts/check-commit-size.sh`:
+
+```sh
+scripts/check-commit-size.sh origin/main HEAD
+```
+
 ## Pull request titles
 
 Candidate required workflow: `.github/workflows/pr-title.yml`. It is not in
@@ -177,7 +217,8 @@ After editing the script, paste it back into the workflow between
 `scripts/check-file-lengths.test.sh` fails while the two differ.
 `crate-tokens.yml` embeds `scripts/check-crate-tokens.py` in the same way,
 checked by `scripts/check-crate-tokens.test.sh` (it fetches only uv and the
-pinned tiktoken). The tests run in `.github/workflows/tests.yml` on every
+pinned tiktoken), and `commit-size.yml` embeds `scripts/check-commit-size.sh`,
+checked by `scripts/check-commit-size.test.sh`. The tests run in `.github/workflows/tests.yml` on every
 push and pull request.
 
 A change merged here takes effect organisation-wide only when the ruleset's
