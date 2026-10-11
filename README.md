@@ -183,9 +183,8 @@ oversized commit, its size and the limit.
   that left the base become part of base..head and are measured again;
   rebase the pull request onto the new base.
 
-The job checks out the full history (`fetch-depth: 0`) with
-`persist-credentials: false`, so no job token stays in `.git/config` on the
-shared self-hosted runner.
+The job fetches the full history of the pull request into a fresh clone
+(see "How the checks fetch the pull request" below).
 
 ### `.commit-size`
 
@@ -246,6 +245,23 @@ checked by `scripts/check-crate-tokens.test.sh` (it fetches only uv and the
 pinned tiktoken), and `commit-size.yml` embeds `scripts/check-commit-size.sh`,
 checked by `scripts/check-commit-size.test.sh`. The tests run in `.github/workflows/tests.yml` on every
 push and pull request.
+
+### How the checks fetch the pull request
+
+The self-hosted runners are shared and keep each repository's workspace
+between jobs, so another job can leave it as a blob-less (filtered) or
+shallow clone. `actions/checkout` reuses such a `.git`, and a check that
+later needs a missing blob fails because the job can no longer fetch it.
+So `commit-size.yml`, `file-lengths.yml` and `crate-tokens.yml` never use
+the workspace: `scripts/fresh-clone.sh`, embedded between `<<'CLONE'` and
+`CLONE` like the engines, fetches the pull request into a new repository
+under `$RUNNER_TEMP`, never with a filter, using the job token through an
+environment-only header that is never written to `.git/config`. The commit
+size check fetches the full history of the base and head (fork heads come
+through the base repository); the file length and crate token checks fetch
+only the merge commit and the base commit. `scripts/fresh-clone.test.sh`
+replays the blob-less workspace failure and fails while a workflow's copy
+differs from the script.
 
 A change merged here takes effect organisation-wide only when the ruleset's
 pinned ref is updated to the new commit. Until then every repository keeps
