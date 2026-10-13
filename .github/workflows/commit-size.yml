@@ -27,9 +27,10 @@
 # editing the script, paste it back between <<'ENGINE' and ENGINE indented ten
 # spaces; scripts/check-commit-size.test.sh fails while the two differ.
 #
-# It runs on our self-hosted Linux runners on metal-02, never on GitHub-hosted
-# runners (the organisation's Actions budget is zero). A repository can only
-# run it if one of its runner groups gives it a runner with these labels.
+# It runs on the light pool of self-hosted Linux runners on metal-02
+# (labels self-hosted, Linux, light), never on GitHub-hosted runners (the
+# organisation's Actions budget is zero). A repository can only run it if one
+# of its runner groups gives it a runner with these labels.
 
 name: Commit Size
 
@@ -44,7 +45,7 @@ permissions:
 
 jobs:
   commit-size:
-    runs-on: [self-hosted, Linux, metal]
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 15
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace

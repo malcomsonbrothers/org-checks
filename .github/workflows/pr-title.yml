@@ -20,9 +20,10 @@
 # the script, paste it back between <<'ENGINE' and ENGINE indented ten spaces;
 # scripts/check-pr-title.test.sh fails while the two differ.
 #
-# It runs on our self-hosted Linux runners on metal-02, never on GitHub-hosted
-# runners (the organisation's Actions budget is zero). A repository can only
-# run it if one of its runner groups gives it a runner with these labels.
+# It runs on the light pool of self-hosted Linux runners on metal-02
+# (labels self-hosted, Linux, light), never on GitHub-hosted runners (the
+# organisation's Actions budget is zero). A repository can only run it if one
+# of its runner groups gives it a runner with these labels.
 
 name: PR Title
 
@@ -36,7 +37,7 @@ permissions:
 
 jobs:
   pr-title:
-    runs-on: [self-hosted, Linux, metal]
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 2
     steps:
       - name: Check the pull request title

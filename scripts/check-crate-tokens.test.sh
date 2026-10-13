@@ -138,7 +138,7 @@ check --bogus; expect "unknown mode" 2 usage
 
 # The workflow runs on pull requests, on self-hosted runners, and embeds this exact engine.
 wf="$here/.github/workflows/crate-tokens.yml"
-run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, metal\]$|--ci "\$PR_BASE"' "$wf"
+run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, light\]$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 3 ] && rc=0 || rc=1
 expect "workflow: pull_request trigger, self-hosted runner, --ci against the base" 0
 run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$here"/.github/workflows/*.yml
