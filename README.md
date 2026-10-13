@@ -12,9 +12,9 @@ in every organisation repository, in the context of that repository.
 ## File lengths
 
 Required workflow: `.github/workflows/file-lengths.yml`. It runs on our
-self-hosted Linux runners (`[self-hosted, Linux, metal]`), never on
-GitHub-hosted runners, so a repository needs a runner group that gives it one
-of those runners. It always enforces: any violation fails the pull request.
+light pool of self-hosted Linux runners on metal-02
+(`[self-hosted, Linux, light]`), never on GitHub-hosted runners, so a
+repository needs a runner group that gives it one of those runners. It always enforces: any violation fails the pull request.
 
 ### Limits
 
@@ -79,8 +79,8 @@ branch).
 ## Crate tokens
 
 Candidate required workflow: `.github/workflows/crate-tokens.yml`. It is not
-in any ruleset yet. Like the file length check it runs on our self-hosted
-Linux runners (`[self-hosted, Linux, metal]`) and always enforces.
+in any ruleset yet. Like the file length check it runs on our light pool of
+self-hosted Linux runners (`[self-hosted, Linux, light]`) and always enforces.
 
 Every unit stays within 50,000 Claude tokens of hand-written source,
 measured as tiktoken `o200k_base` tokens x 1.5, rounded up. The check finds
@@ -149,8 +149,8 @@ repository's `master` when piped from curl); run either directly in a clone.
 ## Commit size
 
 Candidate required workflow: `.github/workflows/commit-size.yml`. It is not
-in any ruleset yet. Like the file length check it runs on our self-hosted
-Linux runners (`[self-hosted, Linux, metal]`) and always enforces.
+in any ruleset yet. Like the file length check it runs on our light pool of
+self-hosted Linux runners (`[self-hosted, Linux, light]`) and always enforces.
 
 It refuses commits too large to review. Every commit in the pull request
 (base..head) may change at most 1,000 lines: additions plus deletions, with

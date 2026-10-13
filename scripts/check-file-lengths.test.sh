@@ -162,7 +162,7 @@ repo adoptclean; lines 10 a.rs; check --print-baseline; expect "nothing oversize
 # The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/file-lengths.yml"
 run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no report mode or workflow_call in the required workflow" 1
-run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, metal\]$|--ci "\$PR_BASE"' "$wf"
+run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, light\]$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 3 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, self-hosted runner, --ci against the base" 0
 run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$here"/.github/workflows/*.yml

@@ -23,8 +23,9 @@
 # the two differ. uv installs the pinned tiktoken; the o200k_base table is
 # cached in the runner's tool cache.
 #
-# It runs on our self-hosted Linux runners on metal-02, never on GitHub-hosted
-# runners (the organisation's Actions budget is zero).
+# It runs on the light pool of self-hosted Linux runners on metal-02
+# (labels self-hosted, Linux, light), never on GitHub-hosted runners (the
+# organisation's Actions budget is zero).
 
 name: Crate Tokens
 
@@ -39,7 +40,7 @@ permissions:
 
 jobs:
   crate-tokens:
-    runs-on: [self-hosted, Linux, metal]
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 10
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace
