@@ -1,0 +1,52 @@
+# Org hooks check, a candidate required workflow for an org ruleset's "Require workflows to
+# pass" rule (pinned commit), like commit-size.yml. Every repository must ship the org pre-push
+# guards: .githooks/org/pre-push-guards.sh identical to scripts/hooks/pre-push-guards.sh at this
+# commit (GUARD_BLOB below is its git blob id; scripts/check-org-hooks-pin.sh fails while it
+# differs), and an executable .githooks/pre-push that calls it. Fix: run scripts/install-hooks.sh.
+# GitHub-hosted: it reads only the pull request head and holds no credentials beyond the
+# read-only job token.
+
+name: Org Hooks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  org-hooks:
+    if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .githooks
+
+      - name: Check the org pre-push guards
+        env:
+          GUARD_BLOB: 802dcf02bd403a969a749bab9cc0ebb9b261318f
+        run: |
+          set -euo pipefail
+          guard=.githooks/org/pre-push-guards.sh
+          install='curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/install-hooks.sh | bash'
+          errors=()
+          blob=$(git rev-parse -q --verify "HEAD:$guard" || :)
+          if [ -z "$blob" ]; then errors+=("$guard is missing")
+          elif [ "$blob" != "$GUARD_BLOB" ]; then errors+=("$guard differs from the org-checks copy"); fi
+          mode=$(git ls-tree HEAD .githooks/pre-push | cut -d ' ' -f 1)
+          if [ "$mode" != 100755 ]; then errors+=(".githooks/pre-push is missing or not executable")
+          elif ! git show HEAD:.githooks/pre-push | grep -qF "$guard"; then errors+=(".githooks/pre-push does not call $guard"); fi
+          if [ ${#errors[@]} -eq 0 ]; then echo "org-hooks: ok"; exit 0; fi
+          echo "## Org hooks" >> "$GITHUB_STEP_SUMMARY"
+          for e in "${errors[@]}"; do
+            echo "::error title=org-hooks::$e. Fix at the repository root: $install"
+            echo "- $e" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "Fix at the repository root, then commit .githooks: \`$install\`" >> "$GITHUB_STEP_SUMMARY"
+          exit 1

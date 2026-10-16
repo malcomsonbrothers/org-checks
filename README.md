@@ -233,6 +233,42 @@ then re-run the failed check (or close and reopen the pull request).
 The workflow embeds `scripts/check-pr-title.sh` in the same way as the file
 length check; `scripts/check-pr-title.test.sh` fails while the two differ.
 
+## Commit count
+
+Candidate required workflow: `.github/workflows/commit-count.yml`
+(GitHub-hosted). It is not in any ruleset yet. A pull request into the
+default branch or `staging` may hold at most 95 commits: GitHub will not
+rebase-merge many more (about 100 work, 300 do not), and releases are never
+squashed. Release more often or split the pull request. The
+`commit-count-exception` label allows more; close and reopen the pull
+request after adding it.
+
+## Org hooks
+
+Candidate required workflow: `.github/workflows/org-hooks.yml`
+(GitHub-hosted). It is not in any ruleset yet. On pull requests into the
+default branch or `staging`, every repository must ship
+`.githooks/org/pre-push-guards.sh` identical to this repository's
+`scripts/hooks/pre-push-guards.sh`, and an executable `.githooks/pre-push`
+that calls it. To install or update, at the repository root, then commit
+`.githooks`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/install-hooks.sh | bash
+git config core.hooksPath .githooks   # once per clone
+```
+
+The guard is local only, so the swarm never waits for CI. A push to
+`swarm/run` counts the commits made since the head of `origin/staging`
+(else the default branch) was committed: from 80 it warns, from 150 it
+refuses the push. Cut a staging release to clear it, and `git fetch` if
+`origin/staging` is stale. A repository's `.release-guard` may only lower
+the thresholds, with `warn <n>` and `refuse <n>` lines. Every repository
+must reinstall when the guard changes here and the ruleset pin moves.
+After changing `scripts/hooks/pre-push-guards.sh`, update `GUARD_BLOB` in
+`org-hooks.yml` and run `scripts/install-hooks.sh` here;
+`scripts/check-org-hooks-pin.sh` fails until both match.
+
 ## Changing a check
 
 The required workflow embeds `scripts/check-file-lengths.sh`, so the job
