@@ -27,7 +27,7 @@
 #   baseline <unit> <tokens>   a grandfathered unit ("." for the repository root);
 #                              the unit fails once it grows past its row
 # Never counted: lockfiles, *.d.ts, source maps, minified files, snapshots, SVGs,
-# OpenAPI and Swagger documents (openapi*.json, swagger*.yaml and so on), anything under target, node_modules, dist, build, .svelte-kit, .next, coverage,
+# OpenAPI and Swagger documents (openapi*.json, swagger*.yaml and so on), the org-vendored .githooks/org/, anything under target, node_modules, dist, build, .svelte-kit, .next, coverage,
 # .sqlx or openapi directories, files that say "@generated" or "DO NOT EDIT" near
 # the top, binaries, symlinks and submodules.
 import json
@@ -47,6 +47,7 @@ SKIP_DIRS = {
     "target", "node_modules", "dist", "build", ".svelte-kit", ".next", ".nuxt", ".turbo",
     "coverage", ".sqlx", "openapi",
 }
+VENDORED = (".githooks/org/",)  # the org pre-push guard, vendored by org-checks
 API_SPEC = re.compile(r"(openapi|swagger)[^/]*\.(json|ya?ml)\Z", re.IGNORECASE)
 GENERATED_MARK = re.compile(rb"@generated|DO NOT EDIT")
 PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?\r?$", re.MULTILINE)
@@ -116,6 +117,8 @@ def skipped(path, exempt_res):
     if name in SKIP_NAMES or name.endswith(SKIP_SUFFIXES) or API_SPEC.match(name):
         return True
     if any(p in SKIP_DIRS for p in parts[:-1]):
+        return True
+    if path.startswith(VENDORED):
         return True
     return any(r.match(path) for r in exempt_res)
 
