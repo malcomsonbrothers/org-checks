@@ -4,13 +4,15 @@
 # Vendors scripts/hooks/pre-push-guards.sh to .githooks/org/ (from this script's own clone when
 # run from a file, else from org-checks at ORG_CHECKS_REF, default master) and makes sure an
 # executable .githooks/pre-push calls it, inserting a marked block after an existing hook's
-# shebang (the block replays the hook's stdin) or creating a minimal hook. Idempotent.
+# shebang (the block replays the hook's stdin), refreshing an existing block, or creating a
+# minimal hook. Idempotent.
 set -euo pipefail
 
 ref=${ORG_CHECKS_REF:-master}
 guard=.githooks/org/pre-push-guards.sh
 hook=.githooks/pre-push
 begin='# >>> org-checks pre-push guards >>>'
+end='# <<< org-checks pre-push guards <<<'
 
 cd "$(git rev-parse --show-toplevel)"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -25,12 +27,16 @@ cp "$tmp/guard" "$guard" && chmod 755 "$guard"
 
 cat > "$tmp/block" <<'BLOCK'
 # >>> org-checks pre-push guards >>>
-# Added by org-checks scripts/install-hooks.sh; re-run it to update .githooks/org/.
-org_refs=$(mktemp) || exit 1
-cat > "$org_refs"
-bash "$(git rev-parse --show-toplevel)/.githooks/org/pre-push-guards.sh" "$@" < "$org_refs" || { rm -f "$org_refs"; exit 1; }
-exec < "$org_refs"
-rm -f "$org_refs"
+# Added by org-checks scripts/install-hooks.sh; re-run it to update. Skipped where the guard is
+# absent (a test fixture); the org-hooks check makes every repository ship it.
+org_guard="$(git rev-parse --show-toplevel)/.githooks/org/pre-push-guards.sh"
+if [ -f "$org_guard" ]; then
+  org_refs=$(mktemp) || exit 1
+  cat > "$org_refs"
+  bash "$org_guard" "$@" < "$org_refs" || { rm -f "$org_refs"; exit 1; }
+  exec < "$org_refs"
+  rm -f "$org_refs"
+fi
 # <<< org-checks pre-push guards <<<
 BLOCK
 
@@ -38,7 +44,11 @@ if [ ! -e "$hook" ]; then
   { echo '#!/bin/sh'; cat "$tmp/block"; } > "$hook"
   echo "install-hooks: created $hook"
 elif grep -qF "$begin" "$hook"; then
-  echo "install-hooks: $hook already calls $guard"
+  awk -v b="$tmp/block" -v begin="$begin" -v end="$end" '
+    $0 == begin { while ((getline l < b) > 0) print l; skip = 1; next }
+    skip { if ($0 == end) skip = 0; next } { print }' "$hook" > "$tmp/hook"
+  cat "$tmp/hook" > "$hook"
+  echo "install-hooks: refreshed the guard call in $hook"
 else
   first=$(head -n 1 "$hook")
   case $first in
