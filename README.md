@@ -97,7 +97,7 @@ non-ignored file counts towards the deepest unit that contains it; files
 outside every unit count towards nothing. These are never counted:
 lockfiles, `*.d.ts`, source maps, `*.min.js` and `*.min.css`, `*.snap`,
 SVGs, OpenAPI and Swagger documents (`openapi*.json`, `swagger*.yaml` and
-so on), anything under `target`, `node_modules`, `dist`, `build`,
+so on), the org-vendored `.githooks/org/`, anything under `target`, `node_modules`, `dist`, `build`,
 `.svelte-kit`, `.next`, `.nuxt`, `.turbo`, `coverage`, `.sqlx` or `openapi`
 directories, files that say `@generated` or `DO NOT EDIT` in their first
 kilobyte, binaries, symlinks and submodules.
