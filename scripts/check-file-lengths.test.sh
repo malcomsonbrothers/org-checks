@@ -14,6 +14,7 @@ repo() { # fresh repo with the check and hooks committed on master
   cd "$work" && rm -rf "$1" "$1.git" && git init -q -b master "$1" && cd "$1"
   mkdir scripts .githooks && cp "$here/scripts/check-file-lengths.sh" scripts/
   cp "$here/.githooks/pre-commit" "$here/.githooks/pre-push" .githooks/
+  mkdir .githooks/org && cp "$here/.githooks/org/pre-push-guards.sh" .githooks/org/
   git config core.hooksPath .githooks && save init
 }
 remote() { git init -q --bare "../$1.git" && git remote add origin "../$1.git" && git push -q -u origin master >/dev/null 2>&1; }
