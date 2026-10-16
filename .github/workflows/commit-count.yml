@@ -1,0 +1,39 @@
+# Org commit count check, a candidate required workflow for an org ruleset's "Require workflows
+# to pass" rule (pinned commit), like commit-size.yml. GitHub will not rebase-merge a pull
+# request with too many commits (100 rebased, 300 refused), so a pull request into the default
+# branch or staging may hold at most 95. The commit-count-exception label allows more; required
+# workflows ignore labeled events, so close and reopen the pull request to re-run.
+# GitHub-hosted: it reads only the event and holds no credentials.
+
+name: Commit Count
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  commit-count:
+    if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Count the pull request's commits
+        env:
+          COMMITS: ${{ github.event.pull_request.commits }}
+          EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'commit-count-exception') }}
+        run: |
+          set -euo pipefail
+          limit=95
+          if [ "$COMMITS" -le "$limit" ]; then
+            echo "commit-count: $COMMITS commit(s), limit $limit: ok"
+          elif [ "$EXCEPTION" = true ]; then
+            echo "commit-count: $COMMITS commits, limit $limit: allowed by the commit-count-exception label"
+          else
+            msg="$COMMITS commits, limit $limit. GitHub will not rebase-merge this many commits; release more often or split the PR"
+            echo "::error title=commit-count::$msg"
+            echo "## Commit count" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg. A reviewer can allow it with the commit-count-exception label, then close and reopen the pull request." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
