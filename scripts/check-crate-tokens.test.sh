@@ -141,8 +141,8 @@ wf="$here/.github/workflows/crate-tokens.yml"
 run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, light\]$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 3 ] && rc=0 || rc=1
 expect "workflow: pull_request trigger, self-hosted runner, --ci against the base" 0
-run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$here"/.github/workflows/*.yml
-expect "no workflow uses a GitHub-hosted runner" 1
+run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' --exclude=commit-count.yml --exclude=org-hooks.yml "$here"/.github/workflows/*.yml
+expect "only commit-count and org-hooks (no checkout credentials) use a GitHub-hosted runner" 1
 run grep -n -E 'uses: [^ ]*@[^ ]*$' "$wf"; expect "every action is pinned with a version comment" 1
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
 [ "$out" = "$(cat "$here/scripts/check-crate-tokens.py")" ] && rc=0 || rc=1
