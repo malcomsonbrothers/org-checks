@@ -2,9 +2,10 @@
 # pass" rule (pinned commit), like commit-size.yml. Every repository must ship the org pre-push
 # guards: .githooks/org/pre-push-guards.sh identical to scripts/hooks/pre-push-guards.sh at this
 # commit (GUARD_BLOB below is its git blob id; scripts/check-org-hooks-pin.sh fails while it
-# differs) or to the previous copy (GUARD_BLOB_PREVIOUS, which guards a single-project repository
-# the same way), and an executable .githooks/pre-push that calls it. Fix: run
-# scripts/install-hooks.sh.
+# differs) or, in a repository without a projects/ folder, to the previous copy
+# (GUARD_BLOB_PREVIOUS, which guards a single-project repository the same way), and an
+# executable .githooks/pre-push that calls it. Fix: run scripts/install-hooks.sh. It runs on pull
+# requests into the default branch, staging or <project>/staging (one folder segment).
 # GitHub-hosted: it reads only the pull request head and holds no credentials beyond the
 # read-only job token.
 
@@ -19,11 +20,22 @@ permissions:
 
 jobs:
   org-hooks:
+    # endsWith also matches a/b/staging; the shell gate below keeps only one folder segment.
     if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging' || endsWith(github.event.pull_request.base.ref, '/staging')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Only pull requests into the default branch, staging or <project>/staging
+        id: gate
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$BASE_REF" = "$DEFAULT_BRANCH" ] || [[ $BASE_REF =~ ^([^/]+/)?staging$ ]]; then echo run=true >> "$GITHUB_OUTPUT"
+          else echo "org-hooks: $BASE_REF is not a staging branch: nothing to check"; fi
+
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
@@ -31,8 +43,10 @@ jobs:
           sparse-checkout: .githooks
 
       - name: Check the org pre-push guards
+        if: steps.gate.outputs.run == 'true'
         env:
-          GUARD_BLOB: 34f2fdb44f38041d62f14dc391caa7367d349760
+          GUARD_BLOB: c270746122977721a82d5ee2c851da4bdee0d32c
+          # Accepted only without projects/; remove at the next pin bump after 2026-10-18.
           GUARD_BLOB_PREVIOUS: 802dcf02bd403a969a749bab9cc0ebb9b261318f
         run: |
           set -euo pipefail
@@ -41,7 +55,8 @@ jobs:
           errors=()
           blob=$(git rev-parse -q --verify "HEAD:$guard" || :)
           if [ -z "$blob" ]; then errors+=("$guard is missing")
-          elif [ "$blob" != "$GUARD_BLOB" ] && [ "$blob" != "$GUARD_BLOB_PREVIOUS" ]; then errors+=("$guard differs from the org-checks copy"); fi
+          elif [ "$blob" != "$GUARD_BLOB" ] && { [ "$blob" != "$GUARD_BLOB_PREVIOUS" ] || [ -n "$(git ls-tree -d HEAD projects)" ]; }; then
+            errors+=("$guard differs from the org-checks copy"); fi
           mode=$(git ls-tree HEAD .githooks/pre-push | cut -d ' ' -f 1)
           if [ "$mode" != 100755 ]; then errors+=(".githooks/pre-push is missing or not executable")
           elif ! git show HEAD:.githooks/pre-push | grep -qF "$guard"; then errors+=(".githooks/pre-push does not call $guard"); fi

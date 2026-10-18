@@ -1,9 +1,9 @@
 # Org commit count check, a candidate required workflow for an org ruleset's "Require workflows
 # to pass" rule (pinned commit), like commit-size.yml. GitHub will not rebase-merge a pull
 # request with too many commits (100 rebased, 300 refused), so a pull request into the default
-# branch, staging or <project>/staging may hold at most 95. The commit-count-exception label
-# allows more; required workflows ignore labeled events, so close and reopen the pull request
-# to re-run.
+# branch, staging or <project>/staging (one folder segment) may hold at most 95. The
+# commit-count-exception label allows more; required workflows ignore labeled events, so close
+# and reopen the pull request to re-run.
 # GitHub-hosted: it reads only the event and holds no credentials.
 
 name: Commit Count
@@ -16,6 +16,7 @@ permissions: {}
 
 jobs:
   commit-count:
+    # endsWith also matches a/b/staging; the shell gate below keeps only one folder segment.
     if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging' || endsWith(github.event.pull_request.base.ref, '/staging')
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -23,9 +24,14 @@ jobs:
       - name: Count the pull request's commits
         env:
           COMMITS: ${{ github.event.pull_request.commits }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'commit-count-exception') }}
         run: |
           set -euo pipefail
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && ! [[ $BASE_REF =~ ^([^/]+/)?staging$ ]]; then
+            echo "commit-count: $BASE_REF is not a staging branch: nothing to check"; exit 0
+          fi
           limit=95
           if [ "$COMMITS" -le "$limit" ]; then
             echo "commit-count: $COMMITS commit(s), limit $limit: ok"

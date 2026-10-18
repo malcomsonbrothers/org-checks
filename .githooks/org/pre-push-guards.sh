@@ -3,9 +3,10 @@
 # .githooks/org/pre-push-guards.sh and called by .githooks/pre-push with the hook's arguments
 # (remote name, URL) and stdin. Do not edit the vendored copy; re-run the installer instead.
 # A push to swarm/run counts its unreleased commits: those committed since the head of
-# <remote>/staging (else the remote's default branch). A push to <project>/swarm/run counts
-# against <remote>/<project>/staging the same way. Rebase merges rewrite SHAs, so the
-# committer date, not ancestry, marks what was released. Warns at 80, refuses at 150.
+# <remote>/staging (else the remote's default branch). A push to <project>/swarm/run, where the
+# pushed commit has a projects/<project>/ folder, counts against <remote>/<project>/staging.
+# Rebase merges rewrite SHAs, so the committer date, not ancestry, marks what was released.
+# Warns at 80, refuses at 150.
 # A repo's .release-guard (read at the pushed commit) may lower either: "warn N", "refuse N";
 # for <project>/swarm/run, so may projects/<project>/.release-guard.
 # Uses only refs git already has: no network.
@@ -24,6 +25,7 @@ while read -r _local_ref local_sha remote_ref _remote_sha; do
     *) continue ;;
   esac
   case $local_sha in *[!0]*) ;; *) continue ;; esac # deleting swarm/run
+  if [ -n "$p" ] && [ "$(git cat-file -t "$local_sha:projects/$p" 2>/dev/null)" != tree ]; then continue; fi
   run=${p:+$p/}swarm/run staging=${p:+$p/}staging
   git rev-parse -q --verify "refs/remotes/$remote/$run^{commit}" >/dev/null || continue
   release=""
