@@ -140,6 +140,9 @@ check --ci HEAD~1; expect "a raised folder row" 1 "^\[FAIL\] projects/a/.crate-t
 pcfg a "baseline core $nc"; cfg "baseline projects/a $na"; save
 check --ci HEAD~1; expect "moving a row to the root is new there" 1 "^\[FAIL\] .crate-tokens: new baseline row projects/a $na$"
 
+repo dotdir; crate projects/.hid; big projects/.hid/src/lib.rs; save; n=$(tokens projects/.hid)
+pcfg .hid "baseline . $n"; check; expect "a dot-folder config is not read" 1 '^\[FAIL\] projects/.hid: '
+
 # --print-baseline prints a row for every unit over the limit at its count; appending them passes.
 repo adopt; crate a; big a/src/lib.rs; pkg web; big web/src/app.ts; crate ok; small ok/src/lib.rs; save
 check --print-baseline; expect "print-baseline exits 0" 0

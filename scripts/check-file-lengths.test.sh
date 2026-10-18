@@ -185,6 +185,10 @@ FILE_LENGTHS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a folder
 pcfg a 'baseline big.rs 650' 'exempt gen/**'; cfg 'baseline projects/a/new.rs 700'; save
 check --ci HEAD~1; expect "moving a row to another file is a new row there" 1 '^\[FAIL\] .file-lengths: new baseline row projects/a/new.rs 700$'
 
+repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > projects/.hid/.file-lengths; save
+check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'
+check --range HEAD~1 HEAD; expect "nor at a commit" 1 'projects/.hid/big.rs: 700 lines, limit 600'
+
 # The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/file-lengths.yml"
 run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no report mode or workflow_call in the required workflow" 1
