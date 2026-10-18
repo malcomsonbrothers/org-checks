@@ -71,7 +71,7 @@ cfg 'exempt gen/**' 'exempts x'; save; check HEAD~1; expect "malformed line fail
 repo shrink; cfg 'exempt gen/**'; save cfg; git branch -q base
 check --ci base HEAD; expect "unchanged config passes" 0
 cfg 'exempt gen/**' 'exempt vendor/**'; lines 1500 vendor/x.js; save "chore: vendor"
-check --ci base HEAD; expect "new exempt line fails" 1 'FAIL\] .commit-size: new exempt line vendor/\*\*'
+check --ci base HEAD; expect "new exempt line fails" 1 '^\[FAIL\] .commit-size: new exempt line vendor/\*\*$'
 COMMIT_SIZE_EXCEPTION=true check --ci base HEAD; expect "the label allows a new exempt line" 0 'allowed by the commit-size-exception label: new exempt line'
 cfg; save "chore: drop exemptions"; check --ci HEAD~1 HEAD; expect "removing lines passes" 0
 
@@ -79,6 +79,20 @@ cfg; save "chore: drop exemptions"; check --ci HEAD~1 HEAD; expect "removing lin
 repo label; lines 1500 a.rs; save big
 COMMIT_SIZE_EXCEPTION=true check --ci master HEAD; expect "label allows an oversized commit" 0 'allowed by the commit-size-exception label: [0-9a-f]* big'
 COMMIT_SIZE_EXCEPTION=false check --ci master HEAD; expect "only true counts" 1 'commit-size-exception label on the pull request, then closing and reopening'
+
+# Each projects/<p>/.commit-size exempts paths relative to its folder only, and may only shrink.
+pcfg() { local d=$1; shift; mkdir -p "projects/$d"; printf '%s\n' "$@" > "projects/$d/.commit-size"; }
+repo mono; pcfg a 'exempt gen/**'; save cfg; git branch -q base; lines 3000 projects/a/gen/x.ts; save "chore: gen a"
+check base; expect "a folder's exempt line applies in its folder" 0 '0 changed lines (+3000 exempt)'
+lines 1001 projects/b/gen/x.ts; save "chore: gen b"; check HEAD~1; expect "and nowhere else" 1 'gen b: 1001 changed lines'
+git reset -q --hard HEAD~1; pcfg a/deep 'exempt **'; lines 1001 projects/a/deep/x.ts; mkdir -p other && echo 'exempt **' > other/.commit-size
+save "feat: deep"; check HEAD~1; expect "only projects/<p>/.commit-size is read" 1 'deep: 1003 changed lines'
+git reset -q --hard HEAD~1; pcfg b 'exempt gen/**'; save "chore: b cfg"
+check --ci base HEAD; expect "a new folder file may only shrink" 1 '^\[FAIL\] projects/b/.commit-size: new exempt line gen/\*\*$'
+COMMIT_SIZE_EXCEPTION=true check --ci base HEAD; expect "the label allows a folder line" 0 'label: new exempt line gen/\*\*$'
+pcfg b 'exempts x'; save; check HEAD~1; expect "a malformed folder line names its file" 1 ':projects/b/.commit-size:1: unknown or malformed line'
+git rm -q -r projects/b; cfg 'exempt projects/a/gen/**'; pcfg a; save "chore: move to root"
+check --ci HEAD~1 HEAD; expect "moving a line to the root is new there" 1 '^\[FAIL\] .commit-size: new exempt line projects/a/gen/\*\*$'
 
 # Merges count only what they add beyond an automatic merge; a clean one counts nothing.
 repo merges; git checkout -q master; lines 900 m1.rs; save; lines 900 m2.rs; save; git checkout -q pr
@@ -138,6 +152,21 @@ COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=staging COMMIT_SIZE_HEAD_REPO=f
 expect "a fork's staging branch does not skip" 1 'big on staging: 1001'
 COMMIT_SIZE_BASE_REF=staging COMMIT_SIZE_HEAD_REF=staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
 expect "only promotions into the default branch skip" 1 'big on staging: 1001'
+# A project's <p>/staging promotes like staging; only one folder segment, only into the default branch.
+repo ppromo; lines 1001 a.rs; save "feat: big on movopop staging"; git update-ref refs/remotes/origin/movopop/staging HEAD
+git update-ref refs/remotes/origin/a/b/staging HEAD; lines 10 b.rs; save "feat: new"
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+expect "promotion from <p>/staging skips its commits" 0 'commits already on origin/movopop/staging are skipped'
+for h in a/b/staging movopop/stagingx movopop-staging; do
+  COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=$h COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+  expect "head $h does not skip" 1 'big on movopop staging: 1001'
+done
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=other/staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+expect "a <p>/staging the clone lacks skips nothing" 1 'big on movopop staging: 1001'
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT_SIZE_HEAD_REPO=fork/r check --ci master HEAD
+expect "a fork's <p>/staging does not skip" 1 'big on movopop staging: 1001'
+COMMIT_SIZE_BASE_REF=movopop/staging COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+expect "<p>/staging into itself does not skip" 1 'big on movopop staging: 1001'
 unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
 # BASE: zero falls back to the merge-base with the default branch; a root commit is measured.
@@ -157,6 +186,10 @@ run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$
 expect "required workflow: pull_request trigger, full fresh clone, self-hosted runner, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$wf"; expect "no GitHub-hosted runner" 1
 run grep -n -E 'filter:' "$wf"; expect "no partial clone, which would need the job token" 1
+
+# shellcheck disable=SC2016 # literal $HEAD_REF in the workflow
+run grep -c -F -e '[[ $HEAD_REF =~ ^([^/]+/)?staging$ ]]' -e 'refs+=("+refs/heads/$HEAD_REF:refs/remotes/origin/$HEAD_REF")' "$wf"
+[ "$out" = 2 ] && rc=0 || rc=1; expect "a promotion from staging or <p>/staging fetches its head branch" 0
 
 # The required workflow embeds this exact script.
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
