@@ -175,7 +175,7 @@ jobs:
 
           LIMIT = 50_000
           CONFIG = ".crate-tokens"
-          PROJECT = re.compile(r"[A-Za-z0-9._-]+\Z")  # a projects/<p> folder that may hold a config
+          PROJECT = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*\Z")  # a projects/<p> folder (no dot-folders)
           SKIP_NAMES = {
               "Cargo.lock", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json",
               "pnpm-lock.yaml", "yarn.lock", "deno.lock",

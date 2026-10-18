@@ -44,7 +44,7 @@ load_configs() {
     '') printf '%s\n' "$config" projects/*/"$config" ;;
     :) git ls-files -- "$config" projects ;;
     *) git ls-tree -r --name-only "$1" -- "$config" projects ;;
-  esac | awk '/^(projects\/[A-Za-z0-9._-]+\/)?\.file-lengths$/' | while IFS= read -r f; do
+  esac | awk '/^(projects\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/)?\.file-lengths$/' | while IFS= read -r f; do
     if [ -z "$1" ] && [ ! -f "$f" ]; then continue; fi
     mkdir -p "$2/${f%"$config"}" && printf '%s\n' "$f"
     if [ -z "$1" ]; then cat "$f"; else git show "${1%:}:$f"; fi > "$2/$f"
