@@ -11,10 +11,11 @@
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (COMMIT_SIZE_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master); with
 # none, every commit reachable from TIP is checked. A promotion (COMMIT_SIZE_BASE_REF is the
-# default branch, COMMIT_SIZE_HEAD_REF is staging and COMMIT_SIZE_HEAD_REPO equals
-# COMMIT_SIZE_REPO) skips commits already on origin/staging.
+# default branch, COMMIT_SIZE_HEAD_REF is staging or <project>/staging and
+# COMMIT_SIZE_HEAD_REPO equals COMMIT_SIZE_REPO) skips commits already on origin/<head ref>.
 # .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
-# Globs: * is one path segment, ** any depth; other characters are literal.
+# Globs: * is one path segment, ** any depth; other characters are literal. Each
+# projects/<p>/.commit-size adds exempt lines relative to its folder.
 set -euo pipefail
 export LC_ALL=C
 
@@ -48,10 +49,11 @@ fallback_base() {
   [ -n "$d" ] && git merge-base "$1" "$d" 2>/dev/null || true
 }
 
-# Turns the org lockfiles plus a .commit-size text (stdin) into rule records:
-#   D regex lockfile manifest (org lockfile) | E regex glob (repo exempt) | X error
+# Turns a .commit-size text (stdin) at path CFG in commit REF, with globs relative to folder
+# PRE, into rule records, after the org lockfiles when CFG is empty:
+#   D regex lockfile manifest (org lockfile) | E regex glob config (repo exempt) | X error
 parse_rules() {
-  awk -v locks="$lockfiles" -v cfg="$1" '
+  awk -v locks="$lockfiles" -v cfg="$1" -v pre="${2:-}" -v ref="${3:-}" '
     function glob_re(g,   r, c, i) {
       r = ""
       for (i = 1; i <= length(g); i++) {
@@ -65,12 +67,20 @@ parse_rules() {
       }
       return "^" r "$"
     }
-    BEGIN { n = split(locks, l, " "); for (i = 1; i <= n; i++) { split(l[i], m, ":")
+    BEGIN { n = cfg == "" ? split(locks, l, " ") : 0; for (i = 1; i <= n; i++) { split(l[i], m, ":")
       print "D " glob_re("**/" m[1]) " " m[1] " " m[2] } }
     { sub(/\r$/, "") }
     /^[ \t]*(#|$)/ { next }
-    $1 == "exempt" && NF == 2 { print "E " glob_re($2) " " $2; next }
-    { print "X " cfg ":" NR ": unknown or malformed line (only exempt <glob> is allowed): " $0 }'
+    $1 == "exempt" && NF == 2 { print "E " glob_re(pre $2) " " $2 " " cfg; next }
+    { print "X " ref ":" cfg ":" NR ": unknown or malformed line (only exempt <glob> is allowed): " $0 }'
+}
+
+# Prints the rule records of .commit-size and each projects/<p>/.commit-size at commit REF.
+rules_at() {
+  local f
+  parse_rules "" < /dev/null
+  git ls-tree -r --name-only "$1" -- "$config" projects | awk '/^(projects\/[A-Za-z0-9._-]+\/)?\.commit-size$/' |
+    while IFS= read -r f; do git show "$1:$f" | parse_rules "$f" "${f%"$config"}" "$1"; done
 }
 
 # Prints commit C's changes as NUL-separated --raw then --numstat records: against its
@@ -157,20 +167,19 @@ elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
   fail "base commit $base is not in this clone; fetch it (in CI, the fresh clone fetches the full history of BASE and HEAD)"
 fi
 
-git show "$tip:$config" 2>/dev/null > "$tmp/cfg" || : > "$tmp/cfg"
-parse_rules "$tip:$config" < "$tmp/cfg" > "$tmp/rules"
+rules_at "$tip" > "$tmp/rules"
 
 status=0
 if grep -q '^X ' "$tmp/rules"; then sed -n 's/^X /[FAIL] /p' "$tmp/rules"; status=1; fi
 
-# A promotion (a pull request from this repository's staging branch into its default branch)
-# skips commits already on origin/staging: they passed this check on their way into staging.
-skip=""
+# A promotion (a pull request from this repository's staging or <project>/staging branch into
+# its default branch) skips commits already on that branch: they passed this check on the way.
+skip="" head=${COMMIT_SIZE_HEAD_REF:-}
 if [ -n "${COMMIT_SIZE_BASE_REF:-}" ] && [ "$COMMIT_SIZE_BASE_REF" = "${COMMIT_SIZE_DEFAULT_BRANCH:-}" ] &&
-  [ "${COMMIT_SIZE_HEAD_REF:-}" = staging ] && [ -n "${COMMIT_SIZE_REPO:-}" ] &&
-  [ "${COMMIT_SIZE_HEAD_REPO:-}" = "$COMMIT_SIZE_REPO" ] && git rev-parse -q --verify "refs/remotes/origin/staging^{commit}" >/dev/null; then
-  skip=refs/remotes/origin/staging
-  echo "commit-size: promotion into $COMMIT_SIZE_BASE_REF: commits already on origin/staging are skipped"
+  [[ $head =~ ^([^/]+/)?staging$ ]] && [ -n "${COMMIT_SIZE_REPO:-}" ] &&
+  [ "${COMMIT_SIZE_HEAD_REPO:-}" = "$COMMIT_SIZE_REPO" ] && git rev-parse -q --verify "refs/remotes/origin/$head^{commit}" >/dev/null; then
+  skip=refs/remotes/origin/$head
+  echo "commit-size: promotion into $COMMIT_SIZE_BASE_REF: commits already on origin/$head are skipped"
 fi
 git rev-list --reverse ${base:+"^$base"} ${skip:+"^$skip"} "$tip" > "$tmp/commits"
 over=0 count=0
@@ -208,17 +217,16 @@ if [ "$over" -gt 0 ]; then
     "commit-size-exception label on the pull request, then closing and reopening it."
 fi
 
-# CI: .commit-size may only shrink compared with BASE.
+# CI: each .commit-size may only shrink compared with the same file at BASE.
 if [ "$ci" -eq 1 ]; then
-  if [ -n "$base" ]; then git show "$base:$config" 2>/dev/null || true; fi |
-    parse_rules "$base:$config" | grep '^E ' > "$tmp/old-rules" || true
-  awk 'FILENAME == ARGV[1] { old[$2] = 1; next } $1 == "E" && !($2 in old) { print "new exempt line " $3 }' \
+  if [ -n "$base" ]; then rules_at "$base"; fi | grep '^E ' > "$tmp/old-rules" || true
+  awk 'FILENAME == ARGV[1] { old[$2 " " $4] = 1; next } $1 == "E" && !(($2 " " $4) in old) { print $4 " new exempt line " $3 }' \
     "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
   if [ -s "$tmp/added" ]; then
     if [ "${COMMIT_SIZE_EXCEPTION:-}" = true ]; then
-      sed 's/^/commit-size: allowed by the commit-size-exception label: /' "$tmp/added"
+      sed 's/^[^ ]* /commit-size: allowed by the commit-size-exception label: /' "$tmp/added"
     else
-      sed 's/^/[FAIL] .commit-size: /' "$tmp/added"
+      sed 's/^\([^ ]*\) /[FAIL] \1: /' "$tmp/added"
       echo "commit-size: .commit-size may only shrink. A reviewer allows an addition by" \
         "putting the commit-size-exception label on the pull request, then closing and reopening it."
       status=1
