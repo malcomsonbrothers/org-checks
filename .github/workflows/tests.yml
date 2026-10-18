@@ -1,6 +1,8 @@
 # Tests for the file length check, its git hooks, the crate token check,
-# the commit size check, the pull request title check, the fresh clone the required workflows
-# check in, and the copies embedded in their workflows.
+# the commit size check, the pre-push release guard and the org-hooks check,
+# the pull request title check, the fresh clone the required workflows check
+# in, and the copies embedded in their workflows. Full history: the guard
+# test reads the previous guard copy the org-hooks check still accepts.
 # This repository's own file length check is file-lengths.yml, which runs
 # on its pull requests like any other workflow.
 # Self-hosted Linux runners on metal-02, never GitHub-hosted runners.
@@ -21,6 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Test the file length check and its hooks
@@ -28,6 +31,9 @@ jobs:
 
       - name: Test the commit size check
         run: scripts/check-commit-size.test.sh
+
+      - name: Test the pre-push release guard
+        run: scripts/pre-push-guards.test.sh
 
       - name: Test the fresh clone the required workflows check in
         run: scripts/fresh-clone.test.sh
