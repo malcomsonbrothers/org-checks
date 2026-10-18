@@ -23,6 +23,7 @@ commits() { # commits N: N empty commits, each a day after the last
   done
 }
 cfg() { local f=$1; shift; mkdir -p "$(dirname "$f")"; printf '%s\n' "$@" > "$f"; git add -A; commits 1; }
+proj() { mkdir -p "projects/$1" && echo x > "projects/$1/README" && git add -A && commits 1; }
 mark() { git update-ref "refs/remotes/origin/$1" HEAD; } # mark REF: origin/REF is at HEAD
 push() { # push REF...: run the guard as git would for pushing HEAD to each REF
   local r
@@ -45,6 +46,8 @@ commits 1; push swarm/run
 expect "80 warn" 0 '^release-guard: 80 unreleased commits on swarm/run: cut a staging release now; GitHub refuses rebase-merge past ~100$'
 expect "the warning names the release ref" 0 '^release-guard: counted since origin/staging at '
 commits 70; push swarm/run; expect "150 refuse" 1 '^release-guard: push refused at 150 or more; release swarm/run to staging first$'
+mark feature/swarm/run; push feature/swarm/run; quiet
+expect "<x>/swarm/run without a projects/<x>/ folder is not counted" 0
 push feature main staging; quiet; expect "other branches are not counted" 0
 out=$(echo "(delete) $zero refs/heads/swarm/run $(git rev-parse HEAD)" | bash "$guard" origin url 2>&1) && rc=0 || rc=$?
 quiet; expect "deleting swarm/run is not counted" 0
@@ -60,14 +63,14 @@ expect "refuse lowered, bad lines ignored" 1 'push refused at 3 or more'
 grep -q 'ignoring .release-guard line: bogus 1' <<<"$out" || expect "bad lines are named" x
 
 # A project's <p>/swarm/run counts since origin/<p>/staging; projects/<p>/.release-guard lowers it.
-repo mono; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; commits 79; mark staging
+repo mono; proj movopop; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; commits 79; mark staging
 push movopop/swarm/run; expect "<p>/swarm/run counts since <p>/staging" 0 '80 unreleased commits on movopop/swarm/run'
 expect "and names it" 0 'counted since origin/movopop/staging at '
 push swarm/run; quiet; expect "swarm/run still counts since staging" 0
 commits 70; push movopop/swarm/run; expect "<p>/swarm/run refuses at 150" 1 'release movopop/swarm/run to movopop/staging first$'
 git update-ref -d refs/remotes/origin/movopop/staging; mark staging; push movopop/swarm/run
 expect "no <p>/staging: counts since the default branch, not staging" 1 'counted since origin/master at '
-repo pcfg; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; mark staging
+repo pcfg; proj movopop; proj other; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; mark staging
 mark other/swarm/run; mark other/staging; cfg projects/movopop/.release-guard 'warn 2' 'refuse 2'
 push movopop/swarm/run; expect "projects/<p>/.release-guard lowers its project" 1 'push refused at 2 or more; release movopop/swarm/run'
 push swarm/run other/swarm/run; quiet; expect "and no other branch" 0
@@ -75,19 +78,35 @@ cfg .release-guard 'warn 3' 'refuse 3'; push other/swarm/run; expect "the root .
 mark a/b/swarm/run; mark a/b/staging; push a/b/swarm/run new/swarm/run; quiet
 expect "nested or untracked <p>/swarm/run is not counted" 0
 
-# The org-hooks workflow accepts this guard and the previous copy, and nothing else.
+# The org-hooks workflow runs on the default branch, staging and <p>/staging only. It accepts
+# this guard, and the previous copy only in a repository without projects/.
 wf="$here/.github/workflows/org-hooks.yml"
-awk '/^        run: \|$/ { on = 1; next } on { sub(/^          /, ""); print }' "$wf" > "$work/org-hooks.sh"
+step() { # step NAME: the run block of the workflow step named NAME
+  awk -v n="$1" 'index($0, "- name: " n) { f = 1 } f && /^      - / && !index($0, n) { exit }
+    f && /^        run: \|$/ { on = 1; next } on { sub(/^          /, ""); print }' "$wf"
+}
+step 'Only pull requests into' > "$work/gate.sh"; step 'Check the org pre-push guards' > "$work/org-hooks.sh"
+for b in main staging movopop/staging a/b/staging feature main-staging; do
+  : > "$work/gate.out"; BASE_REF=$b DEFAULT_BRANCH=main GITHUB_OUTPUT="$work/gate.out" bash "$work/gate.sh" >/dev/null
+  printf '%s=%s ' "$b" "$(cat "$work/gate.out")"
+done > "$work/gates"
+[ "$(cat "$work/gates")" = "main=run=true staging=run=true movopop/staging=run=true a/b/staging= feature= main-staging= " ] && rc=0 || rc=1
+out=$(cat "$work/gates"); expect "org-hooks runs into the default branch, staging and one-segment <p>/staging" 0
 blob() { sed -n "s/^ *$1: *//p" "$wf"; }
-hooks() { # hooks GUARD-FILE: run the workflow step on a repo shipping it
+previous="$here/scripts/fixtures/pre-push-guards.previous.sh"
+[ "$(git hash-object "$previous")" = "$(blob GUARD_BLOB_PREVIOUS)" ] && rc=0 || rc=1; out=""
+expect "the fixture is the previous guard org-hooks accepts" 0
+hooks() { # hooks GUARD-FILE [PROJECT]: run the workflow step on a repo shipping it
   cd "$work" && rm -rf hooks && git init -q hooks && cd hooks && mkdir -p .githooks/org
-  cp "$1" .githooks/org/pre-push-guards.sh && cp "$here/.githooks/pre-push" .githooks/ && git add -A && commits 1
+  cp "$1" .githooks/org/pre-push-guards.sh && cp "$here/.githooks/pre-push" .githooks/
+  if [ -n "${2:-}" ]; then mkdir -p "projects/$2" && echo x > "projects/$2/README"; fi; git add -A && commits 1
   out=$(GUARD_BLOB=$(blob GUARD_BLOB) GUARD_BLOB_PREVIOUS=$(blob GUARD_BLOB_PREVIOUS) GITHUB_STEP_SUMMARY=/dev/null \
     bash "$work/org-hooks.sh" 2>&1) && rc=0 || rc=$?
 }
 hooks "$guard"; expect "org-hooks accepts this guard" 0 'org-hooks: ok'
-git -C "$here" show 802dcf02bd403a969a749bab9cc0ebb9b261318f > "$work/previous.sh"
-hooks "$work/previous.sh"; expect "org-hooks accepts the previous guard" 0 'org-hooks: ok'
+hooks "$previous"; expect "org-hooks accepts the previous guard in a single-project repository" 0 'org-hooks: ok'
+hooks "$previous" movopop; expect "but not in a repository with projects/" 1 'differs from the org-checks copy'
+hooks "$guard" movopop; expect "where this guard passes" 0 'org-hooks: ok'
 { cat "$guard"; echo '# edited'; } > "$work/edited.sh"
 hooks "$work/edited.sh"; expect "org-hooks refuses an edited guard" 1 'differs from the org-checks copy'
 
