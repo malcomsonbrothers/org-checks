@@ -114,7 +114,7 @@ git rm -q --cached x.ts; rm x.ts; cfg 'baseline nope.rs 900'; check; expect "row
 # CI: .file-lengths may only shrink, even when the base has no rows or no file.
 repo ci; cfg '# no rows yet'; save
 lines 900 big.rs; cfg 'baseline big.rs 900'; save
-check --ci HEAD~1; expect "first baseline row is new" 1 'new baseline row big.rs 900'
+check --ci HEAD~1; expect "first baseline row is new" 1 '^\[FAIL\] .file-lengths: new baseline row big.rs 900$'
 FILE_LENGTHS_EXCEPTION=true check --ci HEAD~1; expect "exception label allows it" 0 'allowed by the file-lengths-exception label'
 check --ci HEAD~2; expect "base without .file-lengths" 1 'new baseline row big.rs'
 cfg 'baseline big.rs 901'; lines 901 big.rs; save
@@ -159,6 +159,31 @@ cfg 'limits 1 md'; check --print-baseline; expect "config errors fail print-base
 scripts/check-file-lengths.sh --print-baseline 2>/dev/null | grep -q . && expect "config errors print nothing to stdout" x
 repo adoptclean; lines 10 a.rs; check --print-baseline; expect "nothing oversized prints nothing" 0
 [ -z "$out" ] || expect "print-baseline output is empty" x
+
+# Each projects/<p>/.file-lengths adds exempt and baseline rows relative to its folder only.
+pcfg() { local d=$1; shift; printf '%s\n' "$@" > "projects/$d/.file-lengths"; }
+repo mono; lines 700 projects/a/big.rs; lines 700 projects/a/gen/x.rs; lines 700 projects/b/big.rs
+pcfg a 'baseline big.rs 700' 'exempt gen/**'; mkdir -p projects/b/deep other
+check; expect "a folder's rows cover only its folder" 1 'projects/b/big.rs: 700 lines, limit 600'
+printf '%s\n' "$out" | grep -q 'projects/a/' && expect "folder-relative rows apply" x
+printf '%s\n' 'baseline big.rs 700' | tee projects/b/deep/.file-lengths > other/.file-lengths
+check; expect "only projects/<p>/.file-lengths is read" 1 'projects/b/big.rs: 700'
+pcfg b 'baseline big.rs 700'; save; check; expect "every folder's config is read" 0
+pcfg b 'baseline big.rs 700' 'limit 100 md'; check; expect "limit lines stay at the root" 1 'projects/b/.file-lengths:2: limit lines belong in the root'
+pcfg b 'baseline big.rs 700'; cfg 'baseline projects/b/big.rs 700'; check
+expect "a row in two files is a duplicate" 1 'projects/b/.file-lengths:1: duplicate baseline row for projects/b/big.rs'
+rm .file-lengths; pcfg a 'exempt **'; lines 700 projects/b/c.rs; check; expect "a folder glob stops at its folder" 1 'projects/b/c.rs: 700'
+pcfg a 'baseline big.rs 700' 'exempt gen/**'; rm projects/b/c.rs
+lines 650 projects/a/big.rs; git add -A; run git commit -q -m shrink
+expect "pre-commit lowers a folder row" 0 'lowered the baseline row for projects/a/big.rs to 650'
+[ "$(git show HEAD:projects/a/.file-lengths)" = "$(printf 'baseline big.rs 650\nexempt gen/**')" ] || expect "the folder file is rewritten" x
+git cat-file -e HEAD:.file-lengths 2>/dev/null && expect "no root file is created" x
+lines 651 projects/a/big.rs; save; check --range HEAD~1 HEAD; expect "pre-push reads folder rows at the tip" 1 'projects/a/big.rs: 651 lines, baseline 650'
+lines 650 projects/a/big.rs; save; lines 700 projects/a/new.rs; pcfg a 'baseline big.rs 650' 'baseline new.rs 700' 'exempt gen/**'; save
+check --ci HEAD~1; expect "each folder file may only shrink" 1 '^\[FAIL\] projects/a/.file-lengths: new baseline row projects/a/new.rs 700$'
+FILE_LENGTHS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a folder row" 0 'label: new baseline row projects/a/new.rs 700'
+pcfg a 'baseline big.rs 650' 'exempt gen/**'; cfg 'baseline projects/a/new.rs 700'; save
+check --ci HEAD~1; expect "moving a row to another file is a new row there" 1 '^\[FAIL\] .file-lengths: new baseline row projects/a/new.rs 700$'
 
 # The required workflow always enforces, on pull requests, from self-hosted runners.
 wf="$here/.github/workflows/file-lengths.yml"
