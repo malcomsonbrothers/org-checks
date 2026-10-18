@@ -94,6 +94,9 @@ pcfg b 'exempts x'; save; check HEAD~1; expect "a malformed folder line names it
 git rm -q -r projects/b; cfg 'exempt projects/a/gen/**'; pcfg a; save "chore: move to root"
 check --ci HEAD~1 HEAD; expect "moving a line to the root is new there" 1 '^\[FAIL\] .commit-size: new exempt line projects/a/gen/\*\*$'
 
+repo dotdir; pcfg .hid 'exempt **'; lines 1001 projects/.hid/x.ts; save "feat: hidden"
+check master; expect "a dot-folder config is not read" 1 'hidden: 1002 changed lines'
+
 # Merges count only what they add beyond an automatic merge; a clean one counts nothing.
 repo merges; git checkout -q master; lines 900 m1.rs; save; lines 900 m2.rs; save; git checkout -q pr
 lines 10 p.rs; save; git merge -q --no-edit master; check master~2 HEAD
@@ -153,7 +156,15 @@ expect "a fork's staging branch does not skip" 1 'big on staging: 1001'
 COMMIT_SIZE_BASE_REF=staging COMMIT_SIZE_HEAD_REF=staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
 expect "only promotions into the default branch skip" 1 'big on staging: 1001'
 # A project's <p>/staging promotes like staging; only one folder segment, only into the default branch.
-repo ppromo; lines 1001 a.rs; save "feat: big on movopop staging"; git update-ref refs/remotes/origin/movopop/staging HEAD
+repo evil; lines 3000 a.rs; save "feat: big on evil staging"; git update-ref refs/remotes/origin/evil/staging HEAD
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=evil/staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+expect "<x>/staging without projects/<x>/ at the base is checked in full" 1 'big on evil staging: 3000 changed lines'
+grep -q 'skipped' <<<"$out" && expect "nothing is skipped for evil/staging" x
+lines 1 projects/evil/README; save; check --ci master HEAD
+COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=evil/staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
+expect "a projects/<x>/ folder only on the head does not count" 1 '2 commit(s) checked'
+repo ppromo; lines 1 projects/movopop/README; save; git branch -f -q master HEAD
+lines 1001 a.rs; save "feat: big on movopop staging"; git update-ref refs/remotes/origin/movopop/staging HEAD
 git update-ref refs/remotes/origin/a/b/staging HEAD; lines 10 b.rs; save "feat: new"
 COMMIT_SIZE_BASE_REF=master COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT_SIZE_HEAD_REPO=o/r check --ci master HEAD
 expect "promotion from <p>/staging skips its commits" 0 'commits already on origin/movopop/staging are skipped'
@@ -190,6 +201,16 @@ run grep -n -E 'filter:' "$wf"; expect "no partial clone, which would need the j
 # shellcheck disable=SC2016 # literal $HEAD_REF in the workflow
 run grep -c -F -e '[[ $HEAD_REF =~ ^([^/]+/)?staging$ ]]' -e 'refs+=("+refs/heads/$HEAD_REF:refs/remotes/origin/$HEAD_REF")' "$wf"
 [ "$out" = 2 ] && rc=0 || rc=1; expect "a promotion from staging or <p>/staging fetches its head branch" 0
+
+# commit-count counts only pull requests into the default branch, staging and one-segment <p>/staging.
+cc="$here/.github/workflows/commit-count.yml"
+awk '/^        run: \|$/ { on = 1; next } on { sub(/^          /, ""); print }' "$cc" > "$work/count.sh"
+for b in main staging movopop/staging a/b/staging feature/x; do
+  run env COMMITS=200 EXCEPTION=false BASE_REF=$b DEFAULT_BRANCH=main GITHUB_STEP_SUMMARY=/dev/null bash "$work/count.sh"
+  printf '%s=%s ' "$b" "$rc"
+done > "$work/counts"
+out=$(cat "$work/counts"); [ "$out" = "main=1 staging=1 movopop/staging=1 a/b/staging=0 feature/x=0 " ] && rc=0 || rc=1
+expect "commit-count gates on the base branch" 0
 
 # The required workflow embeds this exact script.
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"

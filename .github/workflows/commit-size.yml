@@ -14,9 +14,10 @@
 # repository lists as `exempt <glob>` in .commit-size at the pull request
 # head (and in each projects/<p>/.commit-size, relative to its folder), nor
 # real binaries of common asset formats. A missing .commit-size never skips
-# the check. A promotion (this repository's staging or <project>/staging
-# branch into its default branch) skips commits already on that branch,
-# which passed this check on their way in.
+# the check. A promotion (this repository's staging branch, or the
+# <project>/staging branch of a projects/<project>/ folder at the base, into
+# its default branch) skips commits already on that branch, which passed
+# this check on their way in.
 #
 # .commit-size may only shrink against the pull request base: a new exempt
 # line fails unless the pull request has the commit-size-exception label. The
@@ -161,8 +162,9 @@ jobs:
           # An all-zero or missing BASE falls back to the merge-base with the default branch
           # (COMMIT_SIZE_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master); with
           # none, every commit reachable from TIP is checked. A promotion (COMMIT_SIZE_BASE_REF is the
-          # default branch, COMMIT_SIZE_HEAD_REF is staging or <project>/staging and
-          # COMMIT_SIZE_HEAD_REPO equals COMMIT_SIZE_REPO) skips commits already on origin/<head ref>.
+          # default branch, COMMIT_SIZE_HEAD_REF is staging, or <project>/staging where BASE has a
+          # projects/<project>/ folder, and COMMIT_SIZE_HEAD_REPO equals COMMIT_SIZE_REPO) skips commits
+          # already on origin/<head ref>.
           # .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
           # Globs: * is one path segment, ** any depth; other characters are literal. Each
           # projects/<p>/.commit-size adds exempt lines relative to its folder.
@@ -229,7 +231,7 @@ jobs:
           rules_at() {
             local f
             parse_rules "" < /dev/null
-            git ls-tree -r --name-only "$1" -- "$config" projects | awk '/^(projects\/[A-Za-z0-9._-]+\/)?\.commit-size$/' |
+            git ls-tree -r --name-only "$1" -- "$config" projects | awk '/^(projects\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/)?\.commit-size$/' |
               while IFS= read -r f; do git show "$1:$f" | parse_rules "$f" "${f%"$config"}" "$1"; done
           }
 
@@ -322,11 +324,13 @@ jobs:
           status=0
           if grep -q '^X ' "$tmp/rules"; then sed -n 's/^X /[FAIL] /p' "$tmp/rules"; status=1; fi
 
-          # A promotion (a pull request from this repository's staging or <project>/staging branch into
-          # its default branch) skips commits already on that branch: they passed this check on the way.
+          # A promotion (a pull request from this repository's staging branch, or the <project>/staging
+          # branch of a projects/<project>/ folder at BASE, into its default branch) skips commits already
+          # on that branch: they passed this check on the way. Any other <x>/staging is checked in full.
           skip="" head=${COMMIT_SIZE_HEAD_REF:-}
           if [ -n "${COMMIT_SIZE_BASE_REF:-}" ] && [ "$COMMIT_SIZE_BASE_REF" = "${COMMIT_SIZE_DEFAULT_BRANCH:-}" ] &&
-            [[ $head =~ ^([^/]+/)?staging$ ]] && [ -n "${COMMIT_SIZE_REPO:-}" ] &&
+            { [ "$head" = staging ] || { [[ $head =~ ^[^/]+/staging$ ]] && [ -n "$base" ] &&
+              [ "$(git cat-file -t "$base:projects/${head%/staging}" 2>/dev/null)" = tree ]; }; } && [ -n "${COMMIT_SIZE_REPO:-}" ] &&
             [ "${COMMIT_SIZE_HEAD_REPO:-}" = "$COMMIT_SIZE_REPO" ] && git rev-parse -q --verify "refs/remotes/origin/$head^{commit}" >/dev/null; then
             skip=refs/remotes/origin/$head
             echo "commit-size: promotion into $COMMIT_SIZE_BASE_REF: commits already on origin/$head are skipped"
