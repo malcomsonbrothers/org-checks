@@ -1,8 +1,9 @@
 # Org commit count check, a candidate required workflow for an org ruleset's "Require workflows
 # to pass" rule (pinned commit), like commit-size.yml. GitHub will not rebase-merge a pull
 # request with too many commits (100 rebased, 300 refused), so a pull request into the default
-# branch or staging may hold at most 95. The commit-count-exception label allows more; required
-# workflows ignore labeled events, so close and reopen the pull request to re-run.
+# branch, staging or <project>/staging may hold at most 95. The commit-count-exception label
+# allows more; required workflows ignore labeled events, so close and reopen the pull request
+# to re-run.
 # GitHub-hosted: it reads only the event and holds no credentials.
 
 name: Commit Count
@@ -15,7 +16,7 @@ permissions: {}
 
 jobs:
   commit-count:
-    if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging'
+    if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging' || endsWith(github.event.pull_request.base.ref, '/staging')
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
