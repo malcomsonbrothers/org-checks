@@ -161,6 +161,8 @@ jobs:
           #                              ** any depth, ? one character, the rest literal
           #   baseline <unit> <tokens>   a grandfathered unit ("." for the repository root);
           #                              the unit fails once it grows past its row
+          # Each projects/<p>/.crate-tokens adds lines relative to its folder ("." is the folder) and
+          # is never counted itself; each config file may only shrink against the same file at BASE.
           # Never counted: lockfiles, *.d.ts, source maps, minified files, snapshots, SVGs,
           # OpenAPI and Swagger documents (openapi*.json, swagger*.yaml and so on), the org-vendored .githooks/org/, anything under target, node_modules, dist, build, .svelte-kit, .next, coverage,
           # .sqlx or openapi directories, files that say "@generated" or "DO NOT EDIT" near
@@ -173,6 +175,7 @@ jobs:
 
           LIMIT = 50_000
           CONFIG = ".crate-tokens"
+          PROJECT = re.compile(r"[A-Za-z0-9._-]+\Z")  # a projects/<p> folder that may hold a config
           SKIP_NAMES = {
               "Cargo.lock", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json",
               "pnpm-lock.yaml", "yarn.lock", "deno.lock",
@@ -225,17 +228,20 @@ jobs:
               return re.compile("".join(out) + r"\Z")
 
 
-          def parse_config(text, name):
-              """Returns (exempt globs, {unit: tokens}); raises ConfigError on bad lines."""
+          def parse_config(text, name, prefix=""):
+              """Returns (exempt globs, {unit: tokens}), with globs and units relative to folder PREFIX
+              made relative to the repository root; raises ConfigError on bad lines."""
               exempt, rows, errors = [], {}, []
               for n, line in enumerate(text.splitlines(), 1):
                   w = line.split("#", 1)[0].split()
                   if not w:
                       continue
                   if w[0] == "exempt" and len(w) == 2:
-                      exempt.append(w[1])
+                      exempt.append(prefix + w[1])
                   elif w[0] == "baseline" and len(w) == 3 and w[2].isdigit():
                       unit = w[1].rstrip("/") or "."
+                      if prefix:
+                          unit = prefix.rstrip("/") if unit == "." else prefix + unit
                       if unit in rows:
                           errors.append(f"{name}:{n}: duplicate baseline row for {unit}")
                       rows[unit] = int(w[2])
@@ -246,6 +252,38 @@ jobs:
               return exempt, rows
 
 
+          def prefix_of(name):
+              return name[: -len(CONFIG)]
+
+
+          def config_names():
+              """.crate-tokens and each projects/<p>/.crate-tokens in the working tree."""
+              names = [CONFIG]
+              if os.path.isdir("projects"):
+                  names += sorted(f"projects/{d}/{CONFIG}" for d in os.listdir("projects")
+                                  if PROJECT.match(d) and os.path.isfile(f"projects/{d}/{CONFIG}"))
+              return names
+
+
+          def load_configs(names):
+              """Returns (exempt globs, {unit: tokens}, {config name: (exempt, rows)}) for every config;
+              raises ConfigError on bad lines or a unit with rows in two files."""
+              exempt, rows, per, errors = [], {}, {}, []
+              for name in names:
+                  try:
+                      e, r = parse_config(read_text(name), name, prefix_of(name))
+                  except ConfigError as err:
+                      errors.append(str(err))
+                      continue
+                  errors += [f"{name}: duplicate baseline row for {u}" for u in sorted(set(r) & set(rows))]
+                  exempt += e
+                  rows.update(r)
+                  per[name] = (e, r)
+              if errors:
+                  raise ConfigError("\n".join(errors))
+              return exempt, rows, per
+
+
           def skipped(path, exempt_res):
               parts = path.split("/")
               name = parts[-1]
@@ -253,7 +291,7 @@ jobs:
                   return True
               if any(p in SKIP_DIRS for p in parts[:-1]):
                   return True
-              if path.startswith(VENDORED):
+              if path.startswith(VENDORED) or (len(parts) == 3 and parts[0] == "projects" and name == CONFIG):
                   return True
               return any(r.match(path) for r in exempt_res)
 
@@ -365,20 +403,24 @@ jobs:
               return mb.decode().strip() if mb else None
 
 
-          def compare_base(base, exempt, rows):
-              """Lines that .crate-tokens added or raised compared with BASE."""
+          def compare_base(base, per):
+              """(config name, line) for each line a config file added or raised compared with the same
+              file at BASE."""
               base = resolve_base(base)
-              old_text = git("show", f"{base}:{CONFIG}", check=False) if base else None
-              try:
-                  old_exempt, old_rows = parse_config((old_text or b"").decode(), f"{base}:{CONFIG}")
-              except ConfigError:
-                  old_exempt, old_rows = [], {}  # a broken base config grandfathers nothing
-              added = [f"new exempt line {g}" for g in exempt if g not in old_exempt]
-              for u, n in sorted(rows.items()):
-                  if u not in old_rows:
-                      added.append(f"new baseline row {u} {n}")
-                  elif n > old_rows[u]:
-                      added.append(f"baseline row {u} raised from {old_rows[u]} to {n}")
+              added = []
+              for name, (exempt, rows) in per.items():
+                  pre = prefix_of(name)
+                  old_text = git("show", f"{base}:{name}", check=False) if base else None
+                  try:
+                      old_exempt, old_rows = parse_config((old_text or b"").decode(), f"{base}:{name}", pre)
+                  except ConfigError:
+                      old_exempt, old_rows = [], {}  # a broken base config grandfathers nothing
+                  added += [(name, f"new exempt line {g[len(pre):]}") for g in exempt if g not in old_exempt]
+                  for u, n in sorted(rows.items()):
+                      if u not in old_rows:
+                          added.append((name, f"new baseline row {u} {n}"))
+                      elif n > old_rows[u]:
+                          added.append((name, f"baseline row {u} raised from {old_rows[u]} to {n}"))
               return base, added
 
 
@@ -392,8 +434,7 @@ jobs:
                   return 2
               os.chdir(git("rev-parse", "--show-toplevel").decode().strip())
               try:
-                  text = read_text(CONFIG)
-                  exempt, rows = parse_config(text, CONFIG)
+                  exempt, rows, per = load_configs(config_names())
               except ConfigError as e:
                   stream = sys.stderr if mode == "--print-baseline" else sys.stdout
                   print("\n".join(f"[FAIL] {m}" for m in str(e).splitlines()), file=stream)
@@ -409,6 +450,7 @@ jobs:
                       if counts[u][0] > LIMIT:
                           print(f"baseline {u} {counts[u][0]}")
                   return 0
+              src = {u: name for name, (_, r) in per.items() for u in r}
               bad = 0
               for u in sorted(counts):
                   n = counts[u][0]
@@ -417,22 +459,22 @@ jobs:
                           print(f"[FAIL] {u}: {n} tokens, baseline {rows[u]} (grew; shrink it to {rows[u]} or fewer, or split it)")
                           bad += 1
                       elif n <= LIMIT:
-                          print(f"note: {u}: {n} tokens is within the limit {LIMIT}; delete its {CONFIG} row")
+                          print(f"note: {u}: {n} tokens is within the limit {LIMIT}; delete its {src[u]} row")
                       elif n < rows[u]:
                           print(f"note: {u}: shrank to {n} tokens; lower its row to \"baseline {u} {n}\"")
                   elif n > LIMIT:
                       print(f"[FAIL] {u}: {n} tokens, limit {LIMIT} (split it)")
                       bad += 1
               for u in sorted(set(rows) - set(counts)):
-                  print(f"note: {CONFIG} row for {u} matches no unit; delete it")
+                  print(f"note: {src[u]} row for {u} matches no unit; delete it")
               if mode == "--ci":
-                  base, added = compare_base(argv[1], exempt, rows)
+                  base, added = compare_base(argv[1], per)
                   allowed = os.environ.get("CRATE_TOKENS_EXCEPTION") == "true"
-                  for a in added:
+                  for name, a in added:
                       if allowed:
                           print(f"crate-tokens: allowed by the crate-tokens-exception label: {a}")
                       else:
-                          print(f"[FAIL] {CONFIG}: {a}")
+                          print(f"[FAIL] {name}: {a}")
                           bad += 1
                   if added and not allowed:
                       print(f"crate-tokens: {CONFIG} may only shrink (compared with {base or 'nothing'}). A reviewer"

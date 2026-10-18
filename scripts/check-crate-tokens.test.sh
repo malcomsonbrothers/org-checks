@@ -103,7 +103,7 @@ big big/src/lib.rs 3000; cfg "baseline big $n"; check; expect "within the limit:
 repo ci; crate big; big big/src/lib.rs; save
 n=$(tokens big)
 cfg "baseline big $n"; save rows
-check --ci HEAD~1; expect "new row fails in CI" 1 "\[FAIL\] .crate-tokens: new baseline row big $n"
+check --ci HEAD~1; expect "new row fails in CI" 1 "^\[FAIL\] .crate-tokens: new baseline row big $n$"
 printf '%s\n' "$out" | grep -q 'crate-tokens-exception label' || expect "failure names the label" x
 CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a new row" 0 'allowed by the crate-tokens-exception label'
 check --ci HEAD; expect "unchanged rows pass" 0
@@ -118,6 +118,27 @@ git branch -q base HEAD~1; CRATE_TOKENS_DEFAULT_BRANCH=base check --ci 000000000
 expect "zero base falls back to the default branch" 0
 git rm -q .crate-tokens; save
 check --ci HEAD~1; expect "deleting .crate-tokens does not skip" 1 '\[FAIL\] big:'
+
+# Each projects/<p>/.crate-tokens adds rows relative to its folder ("." is the folder).
+pcfg() { local d=$1; shift; mkdir -p "projects/$d"; printf '%s\n' "$@" > "projects/$d/.crate-tokens"; }
+repo mono; crate projects/a; big projects/a/src/lib.rs; crate projects/a/core; big projects/a/core/src/lib.rs
+crate projects/b; big projects/b/src/lib.rs; save
+na=$(tokens projects/a); nc=$(tokens projects/a/core); nb=$(tokens projects/b)
+pcfg a "baseline . $na" "baseline core $nc"; check; expect "a folder's rows cover only its folder" 1 "^\[FAIL\] projects/b: $nb tokens, limit"
+printf '%s\n' "$out" | grep -q 'FAIL\] projects/a' && expect "\".\" and relative units in a folder file" x
+pcfg b "baseline . $nb"; save cfgs; check; expect "every folder's config is read" 0
+cfg "baseline projects/b $nb"; check; expect "a unit in two files is a duplicate" 1 'projects/b/.crate-tokens: duplicate baseline row for projects/b'
+rm .crate-tokens projects/b/.crate-tokens; pcfg a 'exempt **'; mkdir -p other; printf 'exempt **\n' | tee other/.crate-tokens > projects/b/src/.crate-tokens
+check; expect "a folder glob stops at its folder, deeper files are not configs" 1 '^\[FAIL\] projects/b:'
+git checkout -q -- projects && rm -rf other projects/b/src/.crate-tokens
+pcfg a "baseline . $na" "baseline core $nc" "baseline gone 60000"; check; expect "notes name the folder file" 0 'projects/a/.crate-tokens row for projects/a/gone matches no unit'
+pcfg a "baseline . $na" "baseline core $nc" 'exempt gen/**'; save
+check --ci HEAD~1; expect "each folder file may only shrink" 1 '^\[FAIL\] projects/a/.crate-tokens: new exempt line gen/\*\*$'
+CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a folder line" 0 'label: new exempt line gen/\*\*$'
+pcfg a "baseline . $((na + 5))" "baseline core $nc"; save
+check --ci HEAD~1; expect "a raised folder row" 1 "^\[FAIL\] projects/a/.crate-tokens: baseline row projects/a raised from $na to $((na + 5))$"
+pcfg a "baseline core $nc"; cfg "baseline projects/a $na"; save
+check --ci HEAD~1; expect "moving a row to the root is new there" 1 "^\[FAIL\] .crate-tokens: new baseline row projects/a $na$"
 
 # --print-baseline prints a row for every unit over the limit at its count; appending them passes.
 repo adopt; crate a; big a/src/lib.rs; pkg web; big web/src/app.ts; crate ok; small ok/src/lib.rs; save
