@@ -175,10 +175,12 @@ oversized commit, its size and the limit.
   conflict resolution or extra change counts. Octopus merges (three or
   more parents) fail; merge the branches one at a time.
 - A changed path containing a newline or a tab fails the commit.
-- Promotions: in a pull request from the repository's own `staging` or
-  `<project>/staging` branch (not a fork's) into the default branch,
-  commits already on that branch are skipped, because they passed this
-  check on their way into it.
+- Promotions: in a pull request from the repository's own `staging`
+  branch (not a fork's) into the default branch, commits already on
+  `origin/staging` are skipped, because they passed this check on their
+  way into staging. The same holds for `<project>/staging` when the base
+  has a `projects/<project>/` folder; any other `<x>/staging` is checked
+  in full.
 - If the base branch is force-pushed while a pull request is open, commits
   that left the base become part of base..head and are measured again;
   rebase the pull request onto the new base.
@@ -265,19 +267,23 @@ refuses the push. Cut a staging release to clear it, and `git fetch` if
 `origin/staging` is stale. A repository's `.release-guard` may only lower
 the thresholds, with `warn <n>` and `refuse <n>` lines. A push to
 `<project>/swarm/run` counts against `origin/<project>/staging` the same
-way, and `projects/<project>/.release-guard` may lower its thresholds too.
-The check also accepts the previous guard (`GUARD_BLOB_PREVIOUS`) when it
-guards a single-project repository the same way; otherwise every
-repository must reinstall when the guard changes here and the ruleset pin
-moves. After changing `scripts/hooks/pre-push-guards.sh`, update
+way when the pushed commit has a `projects/<project>/` folder, and
+`projects/<project>/.release-guard` may lower its thresholds too. In a
+repository without `projects/` the check also accepts the previous guard
+(`GUARD_BLOB_PREVIOUS`, until the next pin bump after 2026-10-18), which
+guards it the same way; otherwise every repository must reinstall when the
+guard changes here and the ruleset pin moves. After changing `scripts/hooks/pre-push-guards.sh`, update
 `GUARD_BLOB` in `org-hooks.yml` and run `scripts/install-hooks.sh` here;
 `scripts/check-org-hooks-pin.sh` fails until both match.
 
 ## Monorepos
 
 A repository holding several projects keeps each under `projects/<project>/`
-(letters, digits, `.`, `_` and `-`) and gives each its own branches:
-`<project>/swarm/run`, `<project>/swarm/next` and `<project>/staging`.
+(letters, digits, `.`, `_` and `-`, not starting with `.`) and gives each
+its own branches: `<project>/swarm/run`, `<project>/swarm/next` and
+`<project>/staging`. The checks key on the folder, not on a monorepo flag:
+any repository with a top-level `projects/<x>/.file-lengths`,
+`.commit-size` or `.crate-tokens` has it read as that folder's config.
 
 - `projects/<project>/.file-lengths`, `.commit-size` and `.crate-tokens`
   add lines with paths, globs and units relative to that folder (`.` is the
@@ -285,10 +291,14 @@ A repository holding several projects keeps each under `projects/<project>/`
   root `.file-lengths`. A path with rows in two files is an error.
 - Each file may only shrink against the same file at the base, so moving
   a row to another file counts as a new row there.
-- `<project>/staging` is a staging branch for the promotion rule, the
-  commit count and the org hooks check. For the promotion skip to be safe
-  it must carry the same ruleset as `staging` (target
-  `refs/heads/*/staging`) before a ruleset pins this version.
+- `<project>/staging` (one folder segment) is a staging branch for the
+  commit count and the org hooks check, and for the promotion rule when
+  the base has `projects/<project>/`.
+- Precondition before a ruleset pins this version: `refs/heads/*/staging`
+  carries the same ruleset as `staging` (pull requests required), and
+  creating a `*/staging` branch is restricted. Otherwise anyone could
+  push commits straight to `<project>/staging` and have the promotion skip
+  them.
 
 ## Changing a check
 
