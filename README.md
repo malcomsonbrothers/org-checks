@@ -175,10 +175,10 @@ oversized commit, its size and the limit.
   conflict resolution or extra change counts. Octopus merges (three or
   more parents) fail; merge the branches one at a time.
 - A changed path containing a newline or a tab fails the commit.
-- Promotions: in a pull request from the repository's own `staging`
-  branch (not a fork's) into the default branch, commits already on
-  `origin/staging` are skipped, because they passed this check on their
-  way into staging.
+- Promotions: in a pull request from the repository's own `staging` or
+  `<project>/staging` branch (not a fork's) into the default branch,
+  commits already on that branch are skipped, because they passed this
+  check on their way into it.
 - If the base branch is force-pushed while a pull request is open, commits
   that left the base become part of base..head and are measured again;
   rebase the pull request onto the new base.
@@ -237,7 +237,7 @@ length check; `scripts/check-pr-title.test.sh` fails while the two differ.
 
 Candidate required workflow: `.github/workflows/commit-count.yml`
 (GitHub-hosted). It is not in any ruleset yet. A pull request into the
-default branch or `staging` may hold at most 95 commits: GitHub will not
+default branch, `staging` or `<project>/staging` may hold at most 95 commits: GitHub will not
 rebase-merge many more (about 100 work, 300 do not), and releases are never
 squashed. Release more often or split the pull request. The
 `commit-count-exception` label allows more; close and reopen the pull
@@ -247,7 +247,7 @@ request after adding it.
 
 Candidate required workflow: `.github/workflows/org-hooks.yml`
 (GitHub-hosted). It is not in any ruleset yet. On pull requests into the
-default branch or `staging`, every repository must ship
+default branch, `staging` or `<project>/staging`, every repository must ship
 `.githooks/org/pre-push-guards.sh` identical to this repository's
 `scripts/hooks/pre-push-guards.sh`, and an executable `.githooks/pre-push`
 that calls it. To install or update, at the repository root, then commit
@@ -263,11 +263,32 @@ The guard is local only, so the swarm never waits for CI. A push to
 (else the default branch) was committed: from 80 it warns, from 150 it
 refuses the push. Cut a staging release to clear it, and `git fetch` if
 `origin/staging` is stale. A repository's `.release-guard` may only lower
-the thresholds, with `warn <n>` and `refuse <n>` lines. Every repository
-must reinstall when the guard changes here and the ruleset pin moves.
-After changing `scripts/hooks/pre-push-guards.sh`, update `GUARD_BLOB` in
-`org-hooks.yml` and run `scripts/install-hooks.sh` here;
+the thresholds, with `warn <n>` and `refuse <n>` lines. A push to
+`<project>/swarm/run` counts against `origin/<project>/staging` the same
+way, and `projects/<project>/.release-guard` may lower its thresholds too.
+The check also accepts the previous guard (`GUARD_BLOB_PREVIOUS`) when it
+guards a single-project repository the same way; otherwise every
+repository must reinstall when the guard changes here and the ruleset pin
+moves. After changing `scripts/hooks/pre-push-guards.sh`, update
+`GUARD_BLOB` in `org-hooks.yml` and run `scripts/install-hooks.sh` here;
 `scripts/check-org-hooks-pin.sh` fails until both match.
+
+## Monorepos
+
+A repository holding several projects keeps each under `projects/<project>/`
+(letters, digits, `.`, `_` and `-`) and gives each its own branches:
+`<project>/swarm/run`, `<project>/swarm/next` and `<project>/staging`.
+
+- `projects/<project>/.file-lengths`, `.commit-size` and `.crate-tokens`
+  add lines with paths, globs and units relative to that folder (`.` is the
+  folder itself). They cannot reach outside it. `limit` lines stay in the
+  root `.file-lengths`. A path with rows in two files is an error.
+- Each file may only shrink against the same file at the base, so moving
+  a row to another file counts as a new row there.
+- `<project>/staging` is a staging branch for the promotion rule, the
+  commit count and the org hooks check. For the promotion skip to be safe
+  it must carry the same ruleset as `staging` (target
+  `refs/heads/*/staging`) before a ruleset pins this version.
 
 ## Changing a check
 
