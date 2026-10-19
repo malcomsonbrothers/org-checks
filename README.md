@@ -234,8 +234,9 @@ length check; `scripts/check-pr-title.test.sh` fails while the two differ.
 ## Path collisions
 
 Candidate required workflow: `.github/workflows/path-collisions.yml`. It is
-not in any ruleset yet. It fails when two tracked paths at the pull request
-head differ only in case or Unicode normalisation: `Foo/x` beside `foo/y`, a
+not in any ruleset yet. It fails when two tracked paths in the pull request's
+merge commit differ only in case or Unicode normalisation, so a head that
+is fine alone still fails if it collides with the base: `Foo/x` beside `foo/y`, a
 file `A` beside a directory `a/`, or NFC and NFD spellings of `café`. Every
 path and each parent directory is folded to lower case plus NFC, and each
 colliding group is listed once, at its shallowest level. On macOS and
@@ -343,7 +344,7 @@ environment-only header that is never written to `.git/config`. The commit
 size check fetches the full history of the base and head (fork heads come
 through the base repository); the file length and crate token checks fetch
 only the merge commit and the base commit, and the path collision check
-only the head commit. `scripts/fresh-clone.test.sh`
+only the merge commit. `scripts/fresh-clone.test.sh`
 replays the blob-less workspace failure and fails while a workflow's copy
 differs from the script.
 

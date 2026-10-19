@@ -60,19 +60,25 @@ check; expect "untracked file ignored" 0
 git add A.txt; check; expect "staged file counted" 1 '^  A.txt  a.txt$'
 check HEAD; expect "the commit is read, not the index" 0
 
+# A head that is fine alone collides with the base in the merge commit, which the workflow reads.
+repo merge; touch_all README.md; save; git checkout -q -b topic; touch_all Notes.md; save
+git checkout -q master; touch_all notes.md; save; git merge -q --no-edit topic
+check topic; expect "head alone passes" 0
+check HEAD; expect "merge commit with the base fails" 1 '^  Notes.md  notes.md$'
+
 # Errors exit 2.
 check no-such-ref; expect "an unknown ref fails to run" 2 'not a commit or tree'
 check a b; expect "too many arguments" 2 usage
 run env -C "$work" "$here/scripts/check-path-collisions.sh"; expect "outside a repository" 2 'not in a git repository'
 
-# The workflow embeds this exact script, checks the head commit, and runs on the org's runner.
+# The workflow embeds this exact script, checks the merge commit, and runs on the org's runner.
 wf="$here/.github/workflows/path-collisions.yml"
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
 [ "$out" = "$(cat "$here/scripts/check-path-collisions.sh")" ] && rc=0 || rc=1
 expect "workflow copy matches scripts/check-path-collisions.sh (re-embed it)" 0
 # shellcheck disable=SC2016 # literal expressions in the workflow
-run grep -c -E '^  pull_request:$|"\$engine" refs/check/head|"\+\$PR_HEAD:refs/check/head"' "$wf"
-expect "workflow: pull_request trigger, checks the fetched head" 0 '^3$'
+run grep -c -E '^  pull_request:$|PR_MERGE: \$\{\{ github\.sha \}\}$|"\$engine" refs/check/merge|"\+\$PR_MERGE:refs/check/merge"' "$wf"
+expect "workflow: pull_request trigger, checks the fetched merge commit" 0 '^4$'
 run grep -h 'runs-on:' "$wf" "$here/.github/workflows/file-lengths.yml"
 [ "$(printf '%s\n' "$out" | sort -u | wc -l | tr -d ' ')" = 1 ] && rc=0 || rc=1
 expect "workflow: same runner as file-lengths" 0
