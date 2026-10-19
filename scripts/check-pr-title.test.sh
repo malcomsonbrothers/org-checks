@@ -46,10 +46,10 @@ title "$(printf 'Bad title\nfeat: hidden on a second line')"; expect "a second l
 title ''; expect "empty title" 1
 title 'WIP feat: add it'; expect "prefix before the type" 1 '    WIP feat: add it'
 
-# The runner every required check uses: GitHub-hosted for public repositories, the light
-# self-hosted pool on metal-02 for private ones.
+# The runner every required check uses: the light self-hosted pool on metal-02 only for
+# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
 hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
 RUNNER
 )
 
@@ -59,7 +59,7 @@ run grep -n -E 'edited|labeled|workflow_call|pull_request_target' <<<"$code"; ex
 run grep -n -E '^  pull-requests: read$|^  contents: read$' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1; expect "read-only permissions" 0
 run grep -n -E 'write' <<<"$code"; expect "no write permission" 1
-run grep -n -x -F "$hybrid" "$wf"; expect "public repositories GitHub-hosted, private ones self-hosted" 0
+run grep -n -x -F "$hybrid" "$wf"; expect "self-hosted only for private and internal repositories" 0
 run grep -n -F 'gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title' "$wf"; expect "reads the live title" 0
 run grep -n -F 'event.pull_request.title' <<<"$code"; expect "never reads the event title" 1
 run grep -n -F 'Edit the title, then re-run this check (or close and reopen the pull request)' "$wf"
