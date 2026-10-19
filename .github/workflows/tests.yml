@@ -1,7 +1,7 @@
 # Tests for the file length check, its git hooks, the crate token check,
 # the commit size check, the pre-push release guard and the org-hooks check,
-# the pull request title check, the fresh clone the required workflows check
-# in, and the copies embedded in their workflows.
+# the pull request title check, the path collision check, the fresh clone
+# the required workflows check in, and the copies embedded in their workflows.
 # This repository's own file length check is file-lengths.yml, which runs
 # on its pull requests like any other workflow.
 
@@ -37,6 +37,9 @@ jobs:
 
       - name: Test the pull request title check
         run: scripts/check-pr-title.test.sh
+
+      - name: Test the path collision check
+        run: scripts/check-path-collisions.test.sh
 
       - name: Check the org hooks pin
         run: scripts/check-org-hooks-pin.sh

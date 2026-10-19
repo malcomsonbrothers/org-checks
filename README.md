@@ -231,6 +231,25 @@ then re-run the failed check (or close and reopen the pull request).
 The workflow embeds `scripts/check-pr-title.sh` in the same way as the file
 length check; `scripts/check-pr-title.test.sh` fails while the two differ.
 
+## Path collisions
+
+Candidate required workflow: `.github/workflows/path-collisions.yml`. It is
+not in any ruleset yet. It fails when two tracked paths at the pull request
+head differ only in case or Unicode normalisation: `Foo/x` beside `foo/y`, a
+file `A` beside a directory `a/`, or NFC and NFD spellings of `café`. Every
+path and each parent directory is folded to lower case plus NFC, and each
+colliding group is listed once, at its shallowest level. On macOS and
+Windows such paths share one name, so a clone silently loses files. Rename
+all but one name in each group. To check a clone locally (it needs python3):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-path-collisions.sh | bash
+```
+
+The workflow embeds `scripts/check-path-collisions.sh` in the same way as
+the file length check; `scripts/check-path-collisions.test.sh` fails while
+the two differ.
+
 ## Commit count
 
 Candidate required workflow: `.github/workflows/commit-count.yml`
@@ -315,14 +334,16 @@ The self-hosted runners are shared and keep each repository's workspace
 between jobs, so another job can leave it as a blob-less (filtered) or
 shallow clone. `actions/checkout` reuses such a `.git`, and a check that
 later needs a missing blob fails because the job can no longer fetch it.
-So `commit-size.yml`, `file-lengths.yml` and `crate-tokens.yml` never use
+So `commit-size.yml`, `file-lengths.yml`, `crate-tokens.yml` and
+`path-collisions.yml` never use
 the workspace: `scripts/fresh-clone.sh`, embedded between `<<'CLONE'` and
 `CLONE` like the engines, fetches the pull request into a new repository
 under `$RUNNER_TEMP`, never with a filter, using the job token through an
 environment-only header that is never written to `.git/config`. The commit
 size check fetches the full history of the base and head (fork heads come
 through the base repository); the file length and crate token checks fetch
-only the merge commit and the base commit. `scripts/fresh-clone.test.sh`
+only the merge commit and the base commit, and the path collision check
+only the head commit. `scripts/fresh-clone.test.sh`
 replays the blob-less workspace failure and fails while a workflow's copy
 differs from the script.
 

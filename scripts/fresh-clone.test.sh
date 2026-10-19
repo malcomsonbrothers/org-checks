@@ -88,7 +88,7 @@ run "$clone" "$work/bad" "$url" --bogus HEAD; expect "an unknown flag fails" 2 u
 
 # Each required workflow fetches through this exact script, runs its check in the clone, and
 # never uses actions/checkout (which reuses the workspace's .git) or a filter.
-for name in commit-size file-lengths crate-tokens; do
+for name in commit-size file-lengths crate-tokens path-collisions; do
   wf="$here/.github/workflows/$name.yml"
   run grep -n -E '^ *(- )?uses: actions/checkout|^ *(filter|fetch-depth):' "$wf"; expect "$name: no actions/checkout or filter" 1
   # shellcheck disable=SC2016 # literal expressions in the workflow

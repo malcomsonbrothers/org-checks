@@ -209,6 +209,7 @@ runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_A
 run runners
 [ "$out" = "$(printf '%s\n' "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
   "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "org-hooks.yml:    runs-on: ubuntu-latest" \
+  "path-collisions.yml:$hybrid" \
   "pr-title.yml:$hybrid" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
 expect "every workflow runs on its intended runner and no other" 0
 

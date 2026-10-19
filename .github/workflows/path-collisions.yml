@@ -1,0 +1,203 @@
+# Org path collision check, a candidate required workflow
+#
+# Like file-lengths.yml, an org ruleset's "Require workflows to pass" rule can
+# point at this file at a pinned commit, so it runs on every pull request in
+# every organisation repository, in the context of that repository. It is not
+# in any ruleset yet. It also runs on this repository's own pull requests.
+#
+# It fails when two tracked paths at the pull request head differ only in case
+# or Unicode normalisation (Foo/x and foo/y, a file A beside a directory a/,
+# NFC and NFD spellings of one name). Such paths collide on macOS and Windows
+# filesystems, and a clone there silently loses files. It always enforces;
+# there is no exception label.
+#
+# The engine below is scripts/check-path-collisions.sh, embedded so the job
+# fetches nothing: the ruleset's pinned commit pins the engine too. After
+# editing the script, paste it back between <<'ENGINE' and ENGINE indented ten
+# spaces; scripts/check-path-collisions.test.sh fails while the two differ.
+
+name: Path Collisions
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  path-collisions:
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      # A new clone in the job's temporary directory, never the runner's reused workspace
+      # (see scripts/fresh-clone.sh, embedded like the engine: paste it back after editing).
+      - name: Fetch the pull request head into a fresh clone
+        env:
+          FRESH_CLONE_TOKEN: ${{ github.token }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          clone="$RUNNER_TEMP/fresh-clone.sh"
+          cat > "$clone" <<'CLONE'
+          #!/usr/bin/env bash
+          # Fetches the pull request into a new, empty repository for a required workflow, instead of
+          # trusting the runner's workspace. The self-hosted runners are shared and keep each repository's
+          # workspace between jobs, so another job may leave it blob-less (filtered), shallow or otherwise
+          # altered; actions/checkout reuses such a .git, a later read needs a blob the job can no longer
+          # fetch, and the check fails. Needs only bash and git (2.32 or later).
+          #   fresh-clone.sh DEST URL [--depth N] [--checkout COMMIT] REFSPEC...
+          # DEST is removed and created afresh, with origin at URL, then REFSPECs are fetched in one go:
+          # never with a filter, with full history unless --depth limits it. --checkout detaches HEAD at
+          # COMMIT with its files; without it there is no working tree checkout. FRESH_CLONE_TOKEN, when
+          # set, authenticates that one fetch through a header exported only for it, so it is never
+          # written to .git/config or any process's command line. The runner user's global and system git config are ignored.
+          set -euo pipefail
+          export LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+          unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+            GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+          fail() { echo "fresh-clone: $*" >&2; exit 2; }
+          usage="usage: fresh-clone.sh DEST URL [--depth N] [--checkout COMMIT] REFSPEC..."
+
+          [ $# -ge 2 ] || fail "$usage"
+          dest=$1 url=$2; shift 2
+          depth=() commit=""
+          while [ $# -gt 0 ]; do
+            case $1 in
+              --depth) [[ ${2:-} =~ ^[1-9][0-9]*$ ]] || fail "--depth needs a positive number"; depth=(--depth "$2"); shift 2 ;;
+              --checkout) [ -n "${2:-}" ] || fail "$usage"; commit=$2; shift 2 ;;
+              -*) fail "$usage" ;;
+              *) break ;;
+            esac
+          done
+          [ $# -gt 0 ] || fail "$usage"
+
+          rm -rf "$dest"
+          git init -q "$dest"
+          git -C "$dest" remote add origin "$url"
+          # The header is exported only around the fetch, never passed as an argument: the runners' users
+          # share /proc, where any process's command line is readable but its environment is not.
+          # printf and echo are builtins, so the token is in no command line here either.
+          if [ -n "${FRESH_CLONE_TOKEN:-}" ]; then
+            basic=$(printf 'x-access-token:%s' "$FRESH_CLONE_TOKEN" | base64 | tr -d '\n')
+            echo "::add-mask::$basic"
+            export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic"
+          fi
+          fetched=0
+          git -C "$dest" fetch --quiet --no-tags --no-recurse-submodules "${depth[@]}" origin "$@" && fetched=1
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 basic
+          [ "$fetched" -eq 1 ] || fail "could not fetch $* from $url"
+          if [ -n "$commit" ]; then git -C "$dest" checkout --quiet --detach "$commit" -- ||
+            fail "could not check out $commit"; fi
+
+          # The new repository must be complete: no promisor remote or filter, and full history unless
+          # --depth asked for less (a short history fetched with --depth is not shallow).
+          if git -C "$dest" config --get-regexp '^(remote\..*\.(promisor|partialclonefilter)|extensions\.partialclone)$'; then
+            fail "the new clone is a partial clone"
+          fi
+          if [ ${#depth[@]} -eq 0 ] && [ "$(git -C "$dest" rev-parse --is-shallow-repository)" != false ]; then
+            fail "the new clone is shallow"
+          fi
+          echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
+          CLONE
+          chmod +x "$clone"
+          # The engine reads only the tree of the head commit (fork heads come through the base
+          # repository): one commit, no checkout, never a filter.
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 "+$PR_HEAD:refs/check/head"
+
+      - name: Check path collisions
+        working-directory: ${{ runner.temp }}/pr
+        run: |
+          engine="$RUNNER_TEMP/check-path-collisions.sh"
+          cat > "$engine" <<'ENGINE'
+          #!/usr/bin/env bash
+          # Org-wide check that no two tracked paths collide on a case-insensitive or Unicode-normalising
+          # filesystem (macOS APFS and HFS+, Windows NTFS). Needs bash, git and python3 (standard library
+          # only: bash and coreutils cannot normalise Unicode). Never skips.
+          #   check-path-collisions.sh          the index (git ls-files)
+          #   check-path-collisions.sh TREEISH  the tree of a commit, e.g. the pull request head
+          # Every path and each of its parent directories is folded to lower case and Unicode NFC; two
+          # different names with the same fold collide (Foo/x and foo/y, file A and directory a/, NFC and
+          # NFD spellings of the same accented name). Only the shallowest collision is reported: when two
+          # directories collide, the files inside them are not listed again. Exits 1 on any collision, 2
+          # when the check cannot run.
+          set -euo pipefail
+          export LC_ALL=C
+
+          fail() { echo "path-collisions: $*" >&2; exit 2; }
+          [ $# -le 1 ] || fail "usage: check-path-collisions.sh [TREEISH]"
+          command -v python3 >/dev/null || fail "python3 is required"
+          git rev-parse --git-dir >/dev/null 2>&1 || fail "not in a git repository"
+
+          if [ $# -eq 1 ]; then
+            git rev-parse -q --verify "$1^{tree}" >/dev/null || fail "not a commit or tree: $1"
+            list() { git ls-tree -r -z --name-only --full-tree "$1"; }
+          else
+            cd "$(git rev-parse --show-toplevel)"
+            list() { git ls-files -z --cached; }
+          fi
+
+          # The fold, the grouping and the report. Paths arrive NUL-separated; bytes that are not UTF-8
+          # pass through unchanged (surrogateescape) and are compared as given.
+          # shellcheck disable=SC2016 # Python source
+          fold='
+          import sys, unicodedata
+          def fold(s):
+              return unicodedata.normalize("NFC", unicodedata.normalize("NFC", s).lower())
+          raw = sys.stdin.buffer.read().split(b"\0")
+          names = {}  # folded path -> set of original names; a directory keeps a trailing slash
+          for b in raw:
+              if not b:
+                  continue
+              parts = b.decode("utf-8", "surrogateescape").split("/")
+              for i in range(1, len(parts) + 1):
+                  orig = "/".join(parts[:i]) + ("/" if i < len(parts) else "")
+                  names.setdefault(fold(orig.rstrip("/")), set()).add(orig)
+          bad = {k for k, v in names.items() if len(v) > 1}
+          def shown(s):
+              s = s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+              return s if s.isprintable() else ascii(s)
+          groups = []
+          for k in bad:
+              parent = k.rpartition("/")[0]
+              hidden = False
+              while parent:
+                  if parent in bad:
+                      hidden = True
+                      break
+                  parent = parent.rpartition("/")[0]
+              if not hidden:
+                  groups.append(sorted(names[k]))
+          for g in sorted(groups):
+              print("  " + "  ".join(shown(n) for n in g))
+          sys.exit(3 if groups else 0)
+          '
+
+          status=0
+          out=$(list "$@" | python3 -I -c "$fold") || status=$?
+          case $status in
+            0) echo "path-collisions: ok, no tracked paths collide" ;;
+            3)
+              status=1
+              echo "path-collisions: these tracked paths differ only in case or Unicode normalisation, so they"
+              echo "collide on macOS and Windows, where a clone gets one of each group and loses the rest."
+              echo "Rename or remove all but one name in each group (a trailing / marks a directory):"
+              printf '%s\n' "$out"
+              ;;
+            *) fail "the check failed to run" ;;
+          esac
+          exit "$status"
+          ENGINE
+          chmod +x "$engine"
+          status=0
+          out=$("$engine" refs/check/head 2>&1) || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=path-collisions::Tracked paths collide on case-insensitive filesystems (macOS, Windows). Rename all but one name in each group listed in the log."
+          fi
+          {
+            echo "## Path collisions"
+            echo '```'
+            printf '%s\n' "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
