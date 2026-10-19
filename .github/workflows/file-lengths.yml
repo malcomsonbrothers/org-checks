@@ -23,11 +23,6 @@
 # one. After editing the script, paste it back between <<'ENGINE' and ENGINE
 # indented ten spaces; scripts/check-file-lengths.test.sh fails while the two
 # differ.
-#
-# It runs on the light pool of self-hosted Linux runners on metal-02
-# (labels self-hosted, Linux, light), never on GitHub-hosted runners (the
-# organisation's Actions budget is zero). A repository can only run it if one
-# of its runner groups gives it a runner with these labels.
 
 name: File Lengths
 
@@ -42,7 +37,7 @@ permissions:
 
 jobs:
   file-lengths:
-    runs-on: [self-hosted, Linux, light]
+    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
     timeout-minutes: 5
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace

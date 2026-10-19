@@ -22,10 +22,6 @@
 # ENGINE indented ten spaces; scripts/check-crate-tokens.test.sh fails while
 # the two differ. uv installs the pinned tiktoken; the o200k_base table is
 # cached in the runner's tool cache.
-#
-# It runs on the light pool of self-hosted Linux runners on metal-02
-# (labels self-hosted, Linux, light), never on GitHub-hosted runners (the
-# organisation's Actions budget is zero).
 
 name: Crate Tokens
 
@@ -40,7 +36,7 @@ permissions:
 
 jobs:
   crate-tokens:
-    runs-on: [self-hosted, Linux, light]
+    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
     timeout-minutes: 10
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace
