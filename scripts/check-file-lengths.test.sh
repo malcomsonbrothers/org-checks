@@ -189,14 +189,28 @@ repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > pr
 check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 check --range HEAD~1 HEAD; expect "nor at a commit" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 
-# The required workflow always enforces, on pull requests, from self-hosted runners.
+# The runner every required check uses: GitHub-hosted for public repositories, the light
+# self-hosted pool on metal-02 for private ones.
+hybrid=$(cat <<'RUNNER'
+    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
+RUNNER
+)
+
+# The required workflow always enforces, on pull requests, on that runner.
 wf="$here/.github/workflows/file-lengths.yml"
 run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no report mode or workflow_call in the required workflow" 1
-run grep -n -E '^  pull_request:$|runs-on: \[self-hosted, Linux, light\]$|--ci "\$PR_BASE"' "$wf"
-[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 3 ] && rc=0 || rc=1
-expect "required workflow: pull_request trigger, self-hosted runner, --ci against the base" 0
-run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' --exclude=commit-count.yml --exclude=org-hooks.yml "$here"/.github/workflows/*.yml
-expect "only commit-count and org-hooks (no checkout credentials) use a GitHub-hosted runner" 1
+run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
+[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
+expect "required workflow: pull_request trigger, --ci against the base" 0
+run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: public repositories GitHub-hosted, private ones self-hosted" 0
+# Every workflow's runner, exactly: commit-count, org-hooks and this repository's own tests
+# hold no checkout credentials and always run GitHub-hosted.
+runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }
+run runners
+[ "$out" = "$(printf '%s\n' "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
+  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "org-hooks.yml:    runs-on: ubuntu-latest" \
+  "pr-title.yml:$hybrid" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
+expect "every workflow runs on its intended runner and no other" 0
 
 # The required workflow embeds this exact script.
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' \
