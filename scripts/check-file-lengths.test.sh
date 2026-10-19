@@ -189,10 +189,10 @@ repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > pr
 check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 check --range HEAD~1 HEAD; expect "nor at a commit" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 
-# The runner every required check uses: GitHub-hosted for public repositories, the light
-# self-hosted pool on metal-02 for private ones.
+# The runner every required check uses: the light self-hosted pool on metal-02 only for
+# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
 hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
 RUNNER
 )
 
@@ -202,7 +202,7 @@ run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no repo
 run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, --ci against the base" 0
-run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: public repositories GitHub-hosted, private ones self-hosted" 0
+run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only for private and internal repositories" 0
 # Every workflow's runner, exactly: commit-count, org-hooks and this repository's own tests
 # hold no checkout credentials and always run GitHub-hosted.
 runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }

@@ -189,10 +189,10 @@ check; expect "root commit, no base" 1 'root: 1001 changed lines'
 check nosuchcommit; expect "unknown base fails" 2 'not in this clone'
 check --bogus; expect "unknown flag fails" 2 'usage'
 
-# The runner every required check uses: GitHub-hosted for public repositories, the light
-# self-hosted pool on metal-02 for private ones.
+# The runner every required check uses: the light self-hosted pool on metal-02 only for
+# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
 hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
 RUNNER
 )
 
@@ -203,7 +203,7 @@ run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 8 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, full fresh clone, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
-expect "one runner: public repositories GitHub-hosted, private ones self-hosted" 0
+expect "one runner: self-hosted only for private and internal repositories" 0
 run grep -n -E 'filter:' "$wf"; expect "no partial clone, which would need the job token" 1
 
 # shellcheck disable=SC2016 # literal $HEAD_REF in the workflow

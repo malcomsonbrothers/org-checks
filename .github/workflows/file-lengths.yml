@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   file-lengths:
-    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace
