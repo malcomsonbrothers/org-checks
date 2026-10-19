@@ -54,6 +54,16 @@ check HEAD; expect "NFC and NFD directory names" 1 "/  .*/\$"
 repo unicase; touch_all "$nfc" "$(printf 'CAF\303\211')"; save
 check; expect "case and Unicode together" 1 "$nfc"
 
+# Simple case folding: final and medial sigma, capital sigma, micro sign and mu. ß is not SS.
+repo sigma; touch_all "$(printf 'a\317\202')" "$(printf 'a\317\203')"; save
+check; expect "final sigma and sigma" 1 "$(printf 'a\317\202')"
+repo capsigma; touch_all "$(printf '\316\221\316\243')" "$(printf '\316\261\317\203')"; save
+check; expect "capital and small alpha sigma" 1 "$(printf '\316\261\317\203')"
+repo micro; touch_all "$(printf '\302\265m')" "$(printf '\316\274m')"; save
+check; expect "micro sign and mu" 1 "$(printf '\316\274m')"
+repo eszett; touch_all "$(printf 'stra\303\237e')" STRASSE; save
+check; expect "eszett and SS do not collide" 0
+
 # Only tracked paths count; the index is read, not the working tree.
 repo untracked; touch_all a.txt; save; touch_all A.txt
 check; expect "untracked file ignored" 0
