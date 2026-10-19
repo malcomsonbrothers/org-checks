@@ -189,13 +189,21 @@ check; expect "root commit, no base" 1 'root: 1001 changed lines'
 check nosuchcommit; expect "unknown base fails" 2 'not in this clone'
 check --bogus; expect "unknown flag fails" 2 'usage'
 
-# The required workflow always enforces, on pull requests, from self-hosted runners.
+# The runner every required check uses: GitHub-hosted for public repositories, the light
+# self-hosted pool on metal-02 for private ones.
+hybrid=$(cat <<'RUNNER'
+    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted", "Linux", "light"]') }}
+RUNNER
+)
+
+# The required workflow always enforces, on pull requests, on that runner.
 wf="$here/.github/workflows/commit-size.yml"
 # shellcheck disable=SC2016 # literal $PR_BASE and $PR_HEAD in the workflow
-run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|runs-on: \[self-hosted, Linux, light\]$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY" "\$\{refs\[@\]\}"$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
-[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 9 ] && rc=0 || rc=1
-expect "required workflow: pull_request trigger, full fresh clone, self-hosted runner, --ci BASE HEAD" 0
-run grep -n -E 'runs-on:.*(ubuntu|windows|macos)-' "$wf"; expect "no GitHub-hosted runner" 1
+run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY" "\$\{refs\[@\]\}"$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
+[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 8 ] && rc=0 || rc=1
+expect "required workflow: pull_request trigger, full fresh clone, --ci BASE HEAD" 0
+run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
+expect "one runner: public repositories GitHub-hosted, private ones self-hosted" 0
 run grep -n -E 'filter:' "$wf"; expect "no partial clone, which would need the job token" 1
 
 # shellcheck disable=SC2016 # literal $HEAD_REF in the workflow
