@@ -11,7 +11,8 @@ in every organisation repository, in the context of that repository.
 
 ## File lengths
 
-Required workflow: `.github/workflows/file-lengths.yml`.
+Required workflow: `.github/workflows/file-lengths.yml`. It always enforces:
+any violation fails the pull request.
 
 ### Limits
 
@@ -75,8 +76,8 @@ branch).
 
 ## Crate tokens
 
-Candidate required workflow: `.github/workflows/crate-tokens.yml`. It is not
-in any ruleset yet.
+Required workflow: `.github/workflows/crate-tokens.yml`. Like the file length
+check it always enforces.
 
 Every unit stays within 50,000 Claude tokens of hand-written source,
 measured as tiktoken `o200k_base` tokens x 1.5, rounded up. The check finds
@@ -144,8 +145,8 @@ repository's `master` when piped from curl); run either directly in a clone.
 
 ## Commit size
 
-Candidate required workflow: `.github/workflows/commit-size.yml`. It is not
-in any ruleset yet.
+Required workflow: `.github/workflows/commit-size.yml`. Like the file length
+check it always enforces.
 
 It refuses commits too large to review. Every commit in the pull request
 (base..head) may change at most 1,000 lines: additions plus deletions, with
