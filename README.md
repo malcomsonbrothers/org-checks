@@ -238,9 +238,10 @@ not in any ruleset yet. It fails when two tracked paths in the pull request's
 merge commit differ only in case or Unicode normalisation, so a head that
 is fine alone still fails if it collides with the base: `Foo/x` beside `foo/y`, a
 file `A` beside a directory `a/`, or NFC and NFD spellings of `café`. Every
-path and each parent directory is folded to lower case plus NFC, and each
-colliding group is listed once, at its shallowest level. On macOS and
-Windows such paths share one name, so a clone silently loses files. Rename
+path and each parent directory is case-folded (one character at a time, so `ß` stays apart from `SS`) plus NFC, and each
+colliding group is listed once, at its shallowest level. Such paths share
+one name on macOS (case and normalisation) and Windows (case only), so a
+clone there silently loses files. Rename
 all but one name in each group. To check a clone locally (it needs python3):
 
 ```sh
