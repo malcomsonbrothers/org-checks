@@ -5,11 +5,13 @@
 # every organisation repository, in the context of that repository. It is not
 # in any ruleset yet. It also runs on this repository's own pull requests.
 #
-# It fails when two tracked paths at the pull request head differ only in case
-# or Unicode normalisation (Foo/x and foo/y, a file A beside a directory a/,
+# It fails when two tracked paths in the pull request's merge commit differ
+# only in case or Unicode normalisation (Foo/x and foo/y, a file A beside a directory a/,
 # NFC and NFD spellings of one name). Such paths collide on macOS and Windows
-# filesystems, and a clone there silently loses files. It always enforces;
-# there is no exception label.
+# filesystems, and a clone there silently loses files. Like file-lengths.yml
+# it reads the merge commit, not the head, so a head that is fine on its own
+# still fails when it collides with paths already on the base. It always
+# enforces; there is no exception label.
 #
 # The engine below is scripts/check-path-collisions.sh, embedded so the job
 # fetches nothing: the ruleset's pinned commit pins the engine too. After
@@ -32,10 +34,10 @@ jobs:
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace
       # (see scripts/fresh-clone.sh, embedded like the engine: paste it back after editing).
-      - name: Fetch the pull request head into a fresh clone
+      - name: Fetch the pull request into a fresh clone
         env:
           FRESH_CLONE_TOKEN: ${{ github.token }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_MERGE: ${{ github.sha }}
         run: |
           clone="$RUNNER_TEMP/fresh-clone.sh"
           cat > "$clone" <<'CLONE'
@@ -100,9 +102,9 @@ jobs:
           echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
           CLONE
           chmod +x "$clone"
-          # The engine reads only the tree of the head commit (fork heads come through the base
-          # repository): one commit, no checkout, never a filter.
-          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 "+$PR_HEAD:refs/check/head"
+          # The engine reads only the tree of the pull request's merge commit (what actions/checkout
+          # would give it): one commit, no checkout, never a filter.
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 "+$PR_MERGE:refs/check/merge"
 
       - name: Check path collisions
         working-directory: ${{ runner.temp }}/pr
@@ -189,7 +191,7 @@ jobs:
           ENGINE
           chmod +x "$engine"
           status=0
-          out=$("$engine" refs/check/head 2>&1) || status=$?
+          out=$("$engine" refs/check/merge 2>&1) || status=$?
           printf '%s\n' "$out"
           if [ "$status" -ne 0 ]; then
             echo "::error title=path-collisions::Tracked paths collide on case-insensitive filesystems (macOS, Windows). Rename all but one name in each group listed in the log."
