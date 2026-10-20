@@ -14,7 +14,8 @@
 # fails the job.
 #
 # .file-lengths may only shrink against the pull request base (in a sync,
-# where the head brings in the default branch tip and the base lacks it,
+# where the head is this repository's default branch, and it brings in
+# the default branch tip, which the base lacks,
 # the tip's lines count as old too): new or raised baseline, exempt or
 # limit lines fail unless the pull request has the file-lengths-exception
 # label (then close and reopen the pull request to re-run).
@@ -50,6 +51,8 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_MERGE: ${{ github.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           clone="$RUNNER_TEMP/fresh-clone.sh"
@@ -116,10 +119,11 @@ jobs:
           CLONE
           chmod +x "$clone"
           # The engine reads the pull request's merge commit (what actions/checkout gave it), and the
-          # config files of the base and of the default branch, never with a filter. Into the default
-          # branch one commit of each is enough; into any other branch the engine needs full history
-          # to tell a sync from the default branch (it treats a shallow clone as no sync).
-          depth=(--depth 1); [ "$BASE_REF" = "$DEFAULT_BRANCH" ] || depth=()
+          # config files of the base and of the default branch, never with a filter. One commit of each
+          # is enough, except for a possible sync (this repository's default branch into another
+          # branch), where the engine needs full history; it treats a shallow clone as no sync.
+          depth=(--depth 1)
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REF" = "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then depth=(); fi
           "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" \
             "+$PR_MERGE:refs/check/merge" "+$PR_BASE:refs/check/base" \
             "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
@@ -130,6 +134,9 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           FILE_LENGTHS_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'file-lengths-exception') }}
           FILE_LENGTHS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          FILE_LENGTHS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          FILE_LENGTHS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          FILE_LENGTHS_REPO: ${{ github.repository }}
         run: |
           engine="$RUNNER_TEMP/check-file-lengths.sh"
           cat > "$engine" <<'ENGINE'
@@ -351,12 +358,12 @@ jobs:
           s/^DROP \(.*\)$/file-lengths: dropped the baseline row for \1 (staged)/p' "$tmp/out"
           fi
 
-          # CI: each .file-lengths may only shrink against BASE, and in a sync (a full clone whose HEAD has the
-          # tip of origin/<default branch> and BASE does not) against that tip too: its lines passed there.
+          # CI: each .file-lengths may only shrink against BASE, and in a sync against origin/<default branch>: FILE_LENGTHS_HEAD_REF
+          # is that branch, FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has its tip and BASE lacks it.
           if [ "$mode" = --ci ]; then
-            base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; d=$(git rev-parse -q --verify "origin/${d:-HEAD}^{commit}" || :)
-            if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
-            if [ -z "$d" ] || [ "$(git rev-parse --is-shallow-repository)" != false ] || ! git merge-base --is-ancestor "$d" HEAD || git merge-base --is-ancestor "$d" "$base" 2>/dev/null; then d=""; fi
+            base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
+            if [ -z "$d" ] || [ "${FILE_LENGTHS_HEAD_REF:-}" != "$d" ] || [ -z "${FILE_LENGTHS_REPO:-}" ] || [ "${FILE_LENGTHS_HEAD_REPO:-}" != "$FILE_LENGTHS_REPO" ] || ! d=$(git rev-parse -q --verify "origin/$d^{commit}") ||
+              [ "$(git rev-parse --is-shallow-repository)" != false ] || ! git merge-base --is-ancestor "$d" HEAD || git merge-base --is-ancestor "$d" "$base" 2>/dev/null; then d=""; fi
             for r in b:"$base" d:"$d"; do : > "$tmp/${r%%:*}.list"; [ -z "${r#*:}" ] || load_configs "${r#*:}" "$tmp/${r%%:*}"; done
             { parse_rules "$tmp/b"; parse_rules "$tmp/d"; } | grep -v '^[OX] ' > "$tmp/old-rules" || true
             grep -v '^[OX] ' "$tmp/rules" > "$tmp/new-rules" || true
