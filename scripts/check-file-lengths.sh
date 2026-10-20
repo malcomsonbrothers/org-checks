@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Org-wide per-file line limits. Needs only bash, git and awk. Never skips: with no
-# .file-lengths the org limits below apply with no exemptions and no baseline.
+# Org-wide per-file line limits. Needs only bash, git and awk. Never skips: without .file-lengths the org limits apply.
 #   check-file-lengths.sh                  tracked and untracked files in the working tree
 #   check-file-lengths.sh --staged         the index (pre-commit); lowers or drops shrunk rows
 #   check-file-lengths.sh --range BASE TIP files changed in BASE...TIP, read at TIP (pre-push)
-#   check-file-lengths.sh --ci BASE        the working tree, and no .file-lengths may add lines
-#                                          against BASE unless FILE_LENGTHS_EXCEPTION=true (label)
+#   check-file-lengths.sh --ci BASE        the working tree, and .file-lengths may only shrink (see CI below)
 #   check-file-lengths.sh --print-baseline "baseline <path> <lines>" for every oversized file
 # A zero or missing BASE: the merge-base with FILE_LENGTHS_DEFAULT_BRANCH, origin/HEAD, main or master.
 # .file-lengths lines (a repo may not change an org limit, only add new file types):
 #   limit <max lines> <extensions...>   exempt <glob>   baseline <path> <lines>
-# Globs: * is one path segment, ** any depth; other characters are literal. Each
-# projects/<p>/.file-lengths adds exempt and baseline lines relative to its folder.
+# Globs: * is one path segment, ** any depth, others literal. projects/<p>/.file-lengths paths are folder-relative.
 set -euo pipefail
 export LC_ALL=C
 
@@ -29,10 +26,19 @@ is_zero() { case ${1:-0} in *[!0]*) return 1 ;; *) return 0 ;; esac; }
 # Prints the merge-base of TIP with the default branch, or nothing (check every file).
 fallback_base() {
   local b d=${FILE_LENGTHS_DEFAULT_BRANCH:-}
-  for b in ${d:+"origin/$d" "$d"} "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || :)" \
-    origin/main origin/master; do
+  for b in ${d:+"origin/$d" "$d"} "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || :)" origin/main origin/master; do
     if [ -n "$b" ] && git rev-parse -q --verify "$b^{commit}" >/dev/null; then git merge-base "$1" "$b" 2>/dev/null || :; return; fi
   done
+}
+
+# Prints the tip of origin/<default branch> in a sync: FILE_LENGTHS_HEAD_REF is that branch,
+# FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has the tip but BASE ($1) not.
+sync_tip() {
+  local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} t
+  [ -n "$d" ] && [ "${FILE_LENGTHS_HEAD_REF:-}" = "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
+  [ "${FILE_LENGTHS_HEAD_REPO:-}" = "$FILE_LENGTHS_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") || return 0
+  [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" HEAD || return 0
+  git merge-base --is-ancestor "$t" "$1" 2>/dev/null || echo "$t"
 }
 
 # Copies .file-lengths and each projects/<p>/.file-lengths at SRC (a commit, : for the
@@ -136,9 +142,7 @@ case $mode in
     tip=$(git rev-parse -q --verify "$3^{commit}") || fail "unknown commit $3"
     base=$2
     if is_zero "$base"; then base=$(fallback_base "$tip")
-    elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-      fail "remote commit $base is not in this clone; run git fetch and push again"
-    fi
+    elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then fail "remote commit $base is not in this clone; run git fetch and push again"; fi
     load_configs "$tip" "$tmp/c" ;;
   --ci|--print-baseline|all) load_configs "" "$tmp/c" ;;
   *) fail "unknown mode $mode" ;;
@@ -216,12 +220,11 @@ if grep -q -E '^(LOWER|DROP) ' "$tmp/out"; then
 s/^DROP \(.*\)$/file-lengths: dropped the baseline row for \1 (staged)/p' "$tmp/out"
 fi
 
-# CI: each .file-lengths may only shrink against BASE, and in a sync against origin/<default branch>: FILE_LENGTHS_HEAD_REF
-# is that branch, FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has its tip and BASE lacks it.
+# CI: .file-lengths may only shrink against BASE (in a sync, also the default branch tip) without the label.
 if [ "$mode" = --ci ]; then
-  base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
-  if [ -z "$d" ] || [ "${FILE_LENGTHS_HEAD_REF:-}" != "$d" ] || [ -z "${FILE_LENGTHS_REPO:-}" ] || [ "${FILE_LENGTHS_HEAD_REPO:-}" != "$FILE_LENGTHS_REPO" ] || ! d=$(git rev-parse -q --verify "origin/$d^{commit}") ||
-    [ "$(git rev-parse --is-shallow-repository)" != false ] || ! git merge-base --is-ancestor "$d" HEAD || git merge-base --is-ancestor "$d" "$base" 2>/dev/null; then d=""; fi
+  base=${2:-}
+  if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
+  d=$(sync_tip "$base")
   for r in b:"$base" d:"$d"; do : > "$tmp/${r%%:*}.list"; [ -z "${r#*:}" ] || load_configs "${r#*:}" "$tmp/${r%%:*}"; done
   { parse_rules "$tmp/b"; parse_rules "$tmp/d"; } | grep -v '^[OX] ' > "$tmp/old-rules" || true
   grep -v '^[OX] ' "$tmp/rules" > "$tmp/new-rules" || true
@@ -234,15 +237,12 @@ if [ "$mode" = --ci ]; then
     $1 == "L" && !(k in old) { print f "new limit " $3 " for ." $2; next }
     $1 == "L" && $3 > old[k] { print f "limit for ." $2 " raised from " old[k] " to " $3 }
   ' "$tmp/old-rules" "$tmp/new-rules" > "$tmp/added"
-  if [ -s "$tmp/added" ]; then
-    if [ "${FILE_LENGTHS_EXCEPTION:-}" = true ]; then
-      sed 's/^[^ ]* /file-lengths: allowed by the file-lengths-exception label: /' "$tmp/added"
-    else
-      sed 's/^\([^ ]*\) /[FAIL] \1: /' "$tmp/added"
-      echo "file-lengths: .file-lengths may only shrink. A reviewer allows an addition by" \
-        "putting the file-lengths-exception label on the pull request, then closing and reopening it."
-      status=1
-    fi
+  if [ -s "$tmp/added" ] && [ "${FILE_LENGTHS_EXCEPTION:-}" = true ]; then
+    sed 's/^[^ ]* /file-lengths: allowed by the file-lengths-exception label: /' "$tmp/added"
+  elif [ -s "$tmp/added" ]; then
+    sed 's/^\([^ ]*\) /[FAIL] \1: /' "$tmp/added"; status=1
+    echo "file-lengths: .file-lengths may only shrink. A reviewer allows an addition by" \
+      "putting the file-lengths-exception label on the pull request, then closing and reopening it."
   fi
 fi
 
