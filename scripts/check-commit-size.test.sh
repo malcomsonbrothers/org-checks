@@ -180,6 +180,15 @@ COMMIT_SIZE_BASE_REF=movopop/staging COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT
 expect "<p>/staging into itself does not skip" 1 'big on movopop staging: 1001'
 unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
+# Any pull request skips commits on the default branch; a sync (TIP has its tip, BASE does not)
+# also takes its .commit-size lines as old, and nothing else does.
+repo sync; git branch -q staging master; git checkout -q master
+cfg 'exempt gen/**'; lines 1500 big.rs; save "feat: labelled on master"; git update-ref refs/remotes/origin/master HEAD
+COMMIT_SIZE_DEFAULT_BRANCH=master check --ci staging master; expect "a sync skips the default branch's commits and lines" 0 '0 commit(s) checked'
+git checkout -q staging; git merge -q master; cfg; save "chore: staging drops it"
+git checkout -q -b regrow; cfg 'exempt gen/**'; save "chore: regrow"
+COMMIT_SIZE_DEFAULT_BRANCH=master check --ci staging HEAD; expect "a line the base dropped is new again" 1 'new exempt line gen/\*\*$'
+
 # BASE: zero falls back to the merge-base with the default branch; a root commit is measured.
 repo fallback; lines 1001 a.rs; save big; git update-ref refs/remotes/origin/master master
 check "$zero" HEAD; expect "zero base uses the merge-base" 1 '1 commit(s) checked'

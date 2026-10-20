@@ -185,6 +185,20 @@ FILE_LENGTHS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a folder
 pcfg a 'baseline big.rs 650' 'exempt gen/**'; cfg 'baseline projects/a/new.rs 700'; save
 check --ci HEAD~1; expect "moving a row to another file is a new row there" 1 '^\[FAIL\] .file-lengths: new baseline row projects/a/new.rs 700$'
 
+# A sync (HEAD has the tip of origin/<default>, BASE does not) takes the tip's rows as old.
+repo sync; cfg '# rows'; save; git branch staging; export FILE_LENGTHS_DEFAULT_BRANCH=master
+lines 650 b.ts; cfg 'baseline b.ts 650'; save; git update-ref refs/remotes/origin/master HEAD
+git checkout -q staging; lines 1 s.ts; save; git merge -q --no-edit master
+check --ci HEAD^1; expect "a sync takes the default branch's rows" 0
+git checkout -q -b feat HEAD^1; lines 650 b.ts; cfg 'baseline b.ts 650'; save
+check --ci HEAD~1; expect "a branch without the tip gets no rows from it" 1 'new baseline row b.ts 650'
+# Regrowth: master has 900, staging lowered it to 700; raising it back is not a sync.
+repo regrow; lines 900 a.ts; cfg 'baseline a.ts 900'; save; git update-ref refs/remotes/origin/master HEAD
+git checkout -q -b staging; lines 700 a.ts; cfg 'baseline a.ts 700'; save
+git checkout -q -b pr; lines 900 a.ts; cfg 'baseline a.ts 900'; save
+check --ci staging; expect "a row regrown to the default branch's value is refused" 1 'raised from 700 to 900'
+unset FILE_LENGTHS_DEFAULT_BRANCH
+
 repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > projects/.hid/.file-lengths; save
 check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 check --range HEAD~1 HEAD; expect "nor at a commit" 1 'projects/.hid/big.rs: 700 lines, limit 600'
