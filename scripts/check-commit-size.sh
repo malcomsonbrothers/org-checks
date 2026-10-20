@@ -14,7 +14,8 @@
 # default branch, COMMIT_SIZE_HEAD_REF is staging, or <project>/staging where BASE has a
 # projects/<project>/ folder, and COMMIT_SIZE_HEAD_REPO equals COMMIT_SIZE_REPO) skips commits
 # already on origin/<head ref>. Any pull request skips commits already on the default branch,
-# which passed in their own pull request, and its .commit-size lines count as old.
+# which passed in their own pull request. In a sync (TIP has the default branch tip and BASE does
+# not) the default branch's .commit-size lines count as old too.
 # .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
 # Globs: * is one path segment, ** any depth; other characters are literal. Each
 # projects/<p>/.commit-size adds exempt lines relative to its folder.
@@ -224,9 +225,12 @@ if [ "$over" -gt 0 ]; then
     "commit-size-exception label on the pull request, then closing and reopening it."
 fi
 
-# CI: each .commit-size may only shrink compared with the same file at BASE or the default branch.
+# CI: each .commit-size may only shrink compared with the same file at BASE, or in a sync also
+# at the default branch tip, whose lines passed there.
 if [ "$ci" -eq 1 ]; then
-  for r in "$base" "$dflt"; do [ -z "$r" ] || rules_at "$r"; done | grep '^E ' > "$tmp/old-rules" || true
+  sync=""; if [ -n "$dflt" ] && [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$dflt" "$tip" &&
+    ! git merge-base --is-ancestor "$dflt" "$base" 2>/dev/null; then sync=$dflt; fi
+  for r in "$base" "$sync"; do [ -z "$r" ] || rules_at "$r"; done | grep '^E ' > "$tmp/old-rules" || true
   awk 'FILENAME == ARGV[1] { old[$2 " " $4] = 1; next } $1 == "E" && !(($2 " " $4) in old) { print $4 " new exempt line " $3 }' \
     "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
   if [ -s "$tmp/added" ]; then
