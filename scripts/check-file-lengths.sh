@@ -5,7 +5,8 @@
 #   check-file-lengths.sh --staged         the index (pre-commit); lowers or drops shrunk rows
 #   check-file-lengths.sh --range BASE TIP files changed in BASE...TIP, read at TIP (pre-push)
 #   check-file-lengths.sh --ci BASE        the working tree, and no .file-lengths may add lines
-#                                          against BASE unless FILE_LENGTHS_EXCEPTION=true (label)
+#                                          against BASE and the default branch (lines already
+#                                          there count as old) unless FILE_LENGTHS_EXCEPTION=true
 #   check-file-lengths.sh --print-baseline "baseline <path> <lines>" for every oversized file
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (FILE_LENGTHS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
@@ -217,15 +218,15 @@ if grep -q -E '^(LOWER|DROP) ' "$tmp/out"; then
 s/^DROP \(.*\)$/file-lengths: dropped the baseline row for \1 (staged)/p' "$tmp/out"
 fi
 
-# CI: each .file-lengths may only shrink compared with the same file at BASE.
+# CI: each .file-lengths may only shrink against BASE; lines on the default branch were allowed there.
 if [ "$mode" = --ci ]; then
-  base=${2:-}
+  base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; d=$(git rev-parse -q --verify "origin/${d:-HEAD}^{commit}" || :)
   if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
-  : > "$tmp/b.list"; if [ -n "$base" ]; then load_configs "$base" "$tmp/b"; fi
-  parse_rules "$tmp/b" | grep -v '^[OX] ' > "$tmp/old-rules" || true
+  for r in b:"$base" d:"$d"; do : > "$tmp/${r%%:*}.list"; [ -z "${r#*:}" ] || load_configs "${r#*:}" "$tmp/${r%%:*}"; done
+  { parse_rules "$tmp/b"; parse_rules "$tmp/d"; } | grep -v '^[OX] ' > "$tmp/old-rules" || true
   grep -v '^[OX] ' "$tmp/rules" > "$tmp/new-rules" || true
   awk '
-    FILENAME == ARGV[1] { old[$1 " " $2 " " $4] = $3; next }
+    FILENAME == ARGV[1] { k = $1 " " $2 " " $4; if (!(k in old) || $3 + 0 > old[k] + 0) old[k] = $3; next }
     { k = $1 " " $2 " " $4; f = $4 " " }
     $1 == "B" && !(k in old) { print f "new baseline row " $2 " " $3; next }
     $1 == "B" && $3 > old[k] { print f "baseline row " $2 " raised from " old[k] " to " $3; next }
