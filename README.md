@@ -42,10 +42,17 @@ it applies the organisation limits with nothing exempt. A repository's
 `.file-lengths` may only shrink against the pull request base. A new or
 raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
 `file-lengths-exception` label to the pull request and then closes and
-reopens it. A line the default branch already has, at that value or higher,
-counts as old: it passed there, so a pull request that brings the default
-branch into a staging branch (a sync) needs no label for it. Required workflows do not re-run on label changes, so the
+reopens it. Required workflows do not re-run on label changes, so the
 reopen is what makes the check see the label.
+
+A sync is a pull request whose head brings in the tip of the default
+branch when its base does not have it yet, such as `master` into
+`<project>/staging`. In a sync, a line the default branch tip already has,
+at that value or higher, also counts as old: it passed there. In any other
+pull request only the base counts, so a row the base has lowered cannot
+grow back to the default branch's value without the label. Telling a sync
+apart needs history, so a pull request into any branch other than the
+default one fetches full history; a shallow clone never counts as a sync.
 
 ### Fixing a pull request that fails on files that were already oversized
 
@@ -200,9 +207,11 @@ request head, may add, one per line (`#` starts a comment):
 - `exempt <glob>` for generated or vendored paths, with the same glob
   syntax as `.file-lengths`
 
-`.commit-size` may only shrink against the pull request base. A line the
-default branch already has counts as old. A new `exempt` line fails unless a reviewer adds the `commit-size-exception`
-label to the pull request and then closes and reopens it. The label also
+`.commit-size` may only shrink against the pull request base, and in a
+sync (see `.file-lengths`) also against the default branch tip, whose lines
+passed there. A new `exempt` line fails unless a reviewer adds the
+`commit-size-exception` label to the pull request and then closes and
+reopens it. The label also
 allows oversized commits, for the rare change that cannot be split.
 
 ### Fixing a pull request that fails

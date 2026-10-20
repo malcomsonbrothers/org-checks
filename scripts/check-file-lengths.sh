@@ -5,11 +5,9 @@
 #   check-file-lengths.sh --staged         the index (pre-commit); lowers or drops shrunk rows
 #   check-file-lengths.sh --range BASE TIP files changed in BASE...TIP, read at TIP (pre-push)
 #   check-file-lengths.sh --ci BASE        the working tree, and no .file-lengths may add lines
-#                                          against BASE and the default branch (lines already
-#                                          there count as old) unless FILE_LENGTHS_EXCEPTION=true
+#                                          against BASE unless FILE_LENGTHS_EXCEPTION=true (label)
 #   check-file-lengths.sh --print-baseline "baseline <path> <lines>" for every oversized file
-# An all-zero or missing BASE falls back to the merge-base with the default branch
-# (FILE_LENGTHS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
+# A zero or missing BASE: the merge-base with FILE_LENGTHS_DEFAULT_BRANCH, origin/HEAD, main or master.
 # .file-lengths lines (a repo may not change an org limit, only add new file types):
 #   limit <max lines> <extensions...>   exempt <glob>   baseline <path> <lines>
 # Globs: * is one path segment, ** any depth; other characters are literal. Each
@@ -218,10 +216,12 @@ if grep -q -E '^(LOWER|DROP) ' "$tmp/out"; then
 s/^DROP \(.*\)$/file-lengths: dropped the baseline row for \1 (staged)/p' "$tmp/out"
 fi
 
-# CI: each .file-lengths may only shrink against BASE; lines on the default branch were allowed there.
+# CI: each .file-lengths may only shrink against BASE, and in a sync (a full clone whose HEAD has the
+# tip of origin/<default branch> and BASE does not) against that tip too: its lines passed there.
 if [ "$mode" = --ci ]; then
   base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; d=$(git rev-parse -q --verify "origin/${d:-HEAD}^{commit}" || :)
   if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
+  if [ -z "$d" ] || [ "$(git rev-parse --is-shallow-repository)" != false ] || ! git merge-base --is-ancestor "$d" HEAD || git merge-base --is-ancestor "$d" "$base" 2>/dev/null; then d=""; fi
   for r in b:"$base" d:"$d"; do : > "$tmp/${r%%:*}.list"; [ -z "${r#*:}" ] || load_configs "${r#*:}" "$tmp/${r%%:*}"; done
   { parse_rules "$tmp/b"; parse_rules "$tmp/d"; } | grep -v '^[OX] ' > "$tmp/old-rules" || true
   grep -v '^[OX] ' "$tmp/rules" > "$tmp/new-rules" || true
