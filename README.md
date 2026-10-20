@@ -53,8 +53,9 @@ not a sync. In a sync, a line the default branch tip already has,
 at that value or higher, also counts as old: it passed there. In any other
 pull request only the base counts, so a row the base has lowered cannot
 grow back to the default branch's value without the label. Telling a sync
-apart needs history, so a pull request into any branch other than the
-default one fetches full history; a shallow clone never counts as a sync.
+apart needs history, so the job fetches full history only when the head
+is this repository's own default branch and the base is another branch;
+a shallow clone never counts as a sync.
 
 ### Fixing a pull request that fails on files that were already oversized
 
