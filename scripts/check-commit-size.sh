@@ -13,7 +13,8 @@
 # none, every commit reachable from TIP is checked. A promotion (COMMIT_SIZE_BASE_REF is the
 # default branch, COMMIT_SIZE_HEAD_REF is staging, or <project>/staging where BASE has a
 # projects/<project>/ folder, and COMMIT_SIZE_HEAD_REPO equals COMMIT_SIZE_REPO) skips commits
-# already on origin/<head ref>.
+# already on origin/<head ref>. Any pull request skips commits already on the default branch,
+# which passed in their own pull request, and its .commit-size lines count as old.
 # .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
 # Globs: * is one path segment, ** any depth; other characters are literal. Each
 # projects/<p>/.commit-size adds exempt lines relative to its folder.
@@ -184,7 +185,10 @@ if [ -n "${COMMIT_SIZE_BASE_REF:-}" ] && [ "$COMMIT_SIZE_BASE_REF" = "${COMMIT_S
   skip=refs/remotes/origin/$head
   echo "commit-size: promotion into $COMMIT_SIZE_BASE_REF: commits already on origin/$head are skipped"
 fi
-git rev-list --reverse ${base:+"^$base"} ${skip:+"^$skip"} "$tip" > "$tmp/commits"
+# Commits on the default branch passed in their own pull request (a sync of <project>/staging
+# from it checks nothing new).
+dflt=$(default_branch)
+git rev-list --reverse ${base:+"^$base"} ${skip:+"^$skip"} ${dflt:+"^$dflt"} "$tip" > "$tmp/commits"
 over=0 count=0
 while IFS= read -r c; do
   count=$((count + 1))
@@ -220,9 +224,9 @@ if [ "$over" -gt 0 ]; then
     "commit-size-exception label on the pull request, then closing and reopening it."
 fi
 
-# CI: each .commit-size may only shrink compared with the same file at BASE.
+# CI: each .commit-size may only shrink compared with the same file at BASE or the default branch.
 if [ "$ci" -eq 1 ]; then
-  if [ -n "$base" ]; then rules_at "$base"; fi | grep '^E ' > "$tmp/old-rules" || true
+  for r in "$base" "$dflt"; do [ -z "$r" ] || rules_at "$r"; done | grep '^E ' > "$tmp/old-rules" || true
   awk 'FILENAME == ARGV[1] { old[$2 " " $4] = 1; next } $1 == "E" && !(($2 " " $4) in old) { print $4 " new exempt line " $3 }' \
     "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
   if [ -s "$tmp/added" ]; then

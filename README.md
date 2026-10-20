@@ -42,7 +42,9 @@ it applies the organisation limits with nothing exempt. A repository's
 `.file-lengths` may only shrink against the pull request base. A new or
 raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
 `file-lengths-exception` label to the pull request and then closes and
-reopens it. Required workflows do not re-run on label changes, so the
+reopens it. A line the default branch already has, at that value or higher,
+counts as old: it passed there, so a pull request that brings the default
+branch into a staging branch (a sync) needs no label for it. Required workflows do not re-run on label changes, so the
 reopen is what makes the check see the label.
 
 ### Fixing a pull request that fails on files that were already oversized
@@ -177,6 +179,11 @@ oversized commit, its size and the limit.
   way into staging. The same holds for `<project>/staging` when the base
   has a `projects/<project>/` folder; any other `<x>/staging` is checked
   in full.
+- Any pull request skips commits already on the default branch: they
+  passed this check in their own pull request, some with the label. So a
+  pull request that brings the default branch into `<project>/staging` (a
+  sync) measures only what the sync itself adds, such as a conflict
+  resolution in its merge commit.
 - If the base branch is force-pushed while a pull request is open, commits
   that left the base become part of base..head and are measured again;
   rebase the pull request onto the new base.
@@ -193,8 +200,8 @@ request head, may add, one per line (`#` starts a comment):
 - `exempt <glob>` for generated or vendored paths, with the same glob
   syntax as `.file-lengths`
 
-`.commit-size` may only shrink against the pull request base. A new
-`exempt` line fails unless a reviewer adds the `commit-size-exception`
+`.commit-size` may only shrink against the pull request base. A line the
+default branch already has counts as old. A new `exempt` line fails unless a reviewer adds the `commit-size-exception`
 label to the pull request and then closes and reopens it. The label also
 allows oversized commits, for the rare change that cannot be split.
 
