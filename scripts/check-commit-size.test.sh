@@ -180,14 +180,17 @@ COMMIT_SIZE_BASE_REF=movopop/staging COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT
 expect "<p>/staging into itself does not skip" 1 'big on movopop staging: 1001'
 unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
-# Any pull request skips commits on the default branch; a sync (TIP has its tip, BASE does not)
-# also takes its .commit-size lines as old, and nothing else does.
+# Any pull request skips commits on the default branch; a sync (head ref is the default branch in
+# this repository, TIP has its tip, BASE does not) also takes its .commit-size lines as old.
 repo sync; git branch -q staging master; git checkout -q master
 cfg 'exempt gen/**'; lines 1500 big.rs; save "feat: labelled on master"; git update-ref refs/remotes/origin/master HEAD
-COMMIT_SIZE_DEFAULT_BRANCH=master check --ci staging master; expect "a sync skips the default branch's commits and lines" 0 '0 commit(s) checked'
+export COMMIT_SIZE_DEFAULT_BRANCH=master COMMIT_SIZE_REPO=o/r
+COMMIT_SIZE_HEAD_REF=master COMMIT_SIZE_HEAD_REPO=o/r check --ci staging master; expect "a sync skips the default branch's commits and lines" 0 '0 commit(s) checked'
+COMMIT_SIZE_HEAD_REF=master COMMIT_SIZE_HEAD_REPO=fork/r check --ci staging master; expect "a fork's default branch is no sync" 1 'new exempt line gen/\*\*$'
 git checkout -q staging; git merge -q master; cfg; save "chore: staging drops it"
 git checkout -q -b regrow; cfg 'exempt gen/**'; save "chore: regrow"
-COMMIT_SIZE_DEFAULT_BRANCH=master check --ci staging HEAD; expect "a line the base dropped is new again" 1 'new exempt line gen/\*\*$'
+COMMIT_SIZE_HEAD_REF=master COMMIT_SIZE_HEAD_REPO=o/r check --ci staging HEAD; expect "a line the base dropped is new again" 1 'new exempt line gen/\*\*$'
+unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
 # BASE: zero falls back to the merge-base with the default branch; a root commit is measured.
 repo fallback; lines 1001 a.rs; save big; git update-ref refs/remotes/origin/master master

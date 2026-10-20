@@ -216,12 +216,12 @@ if grep -q -E '^(LOWER|DROP) ' "$tmp/out"; then
 s/^DROP \(.*\)$/file-lengths: dropped the baseline row for \1 (staged)/p' "$tmp/out"
 fi
 
-# CI: each .file-lengths may only shrink against BASE, and in a sync (a full clone whose HEAD has the
-# tip of origin/<default branch> and BASE does not) against that tip too: its lines passed there.
+# CI: each .file-lengths may only shrink against BASE, and in a sync against origin/<default branch>: FILE_LENGTHS_HEAD_REF
+# is that branch, FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has its tip and BASE lacks it.
 if [ "$mode" = --ci ]; then
-  base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; d=$(git rev-parse -q --verify "origin/${d:-HEAD}^{commit}" || :)
-  if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
-  if [ -z "$d" ] || [ "$(git rev-parse --is-shallow-repository)" != false ] || ! git merge-base --is-ancestor "$d" HEAD || git merge-base --is-ancestor "$d" "$base" 2>/dev/null; then d=""; fi
+  base=${2:-} d=${FILE_LENGTHS_DEFAULT_BRANCH:-}; if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
+  if [ -z "$d" ] || [ "${FILE_LENGTHS_HEAD_REF:-}" != "$d" ] || [ -z "${FILE_LENGTHS_REPO:-}" ] || [ "${FILE_LENGTHS_HEAD_REPO:-}" != "$FILE_LENGTHS_REPO" ] || ! d=$(git rev-parse -q --verify "origin/$d^{commit}") ||
+    [ "$(git rev-parse --is-shallow-repository)" != false ] || ! git merge-base --is-ancestor "$d" HEAD || git merge-base --is-ancestor "$d" "$base" 2>/dev/null; then d=""; fi
   for r in b:"$base" d:"$d"; do : > "$tmp/${r%%:*}.list"; [ -z "${r#*:}" ] || load_configs "${r#*:}" "$tmp/${r%%:*}"; done
   { parse_rules "$tmp/b"; parse_rules "$tmp/d"; } | grep -v '^[OX] ' > "$tmp/old-rules" || true
   grep -v '^[OX] ' "$tmp/rules" > "$tmp/new-rules" || true

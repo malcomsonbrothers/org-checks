@@ -45,9 +45,11 @@ raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
 reopens it. Required workflows do not re-run on label changes, so the
 reopen is what makes the check see the label.
 
-A sync is a pull request whose head brings in the tip of the default
+A sync is a pull request whose head branch is the repository's own default
+branch (not a fork's) and whose head brings in the tip of the default
 branch when its base does not have it yet, such as `master` into
-`<project>/staging`. In a sync, a line the default branch tip already has,
+`<project>/staging`. A feature branch that merged the default branch is
+not a sync. In a sync, a line the default branch tip already has,
 at that value or higher, also counts as old: it passed there. In any other
 pull request only the base counts, so a row the base has lowered cannot
 grow back to the default branch's value without the label. Telling a sync
