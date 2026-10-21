@@ -160,20 +160,16 @@ cfg 'nonsense'; check --print-baseline; expect "config errors fail print-baselin
 cfg; check --report; expect "report lists units" 0 '^  tokens  files  unit$'
 check --bogus; expect "unknown mode" 2 usage
 
-# The runner every required check uses: the light self-hosted pool on metal-02 only for
-# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
-hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
-RUNNER
-)
+# Every required check uses the self-hosted metal pool for every repository visibility.
+metal='    runs-on: [self-hosted, Linux, metal]'
 
 # The workflow runs on pull requests, on that runner, and embeds this exact engine.
 wf="$here/.github/workflows/crate-tokens.yml"
 run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "workflow: pull_request trigger, --ci against the base" 0
-run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
-expect "one runner: self-hosted only for private and internal repositories" 0
+run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$metal" "$wf")" ] && rc=0 || rc=1
+expect "one runner: self-hosted metal for every repository visibility" 0
 run grep -n -E 'uses: [^ ]*@[^ ]*$' "$wf"; expect "every action is pinned with a version comment" 1
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
 [ "$out" = "$(cat "$here/scripts/check-crate-tokens.py")" ] && rc=0 || rc=1

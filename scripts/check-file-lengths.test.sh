@@ -208,12 +208,8 @@ repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > pr
 check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 check --range HEAD~1 HEAD; expect "nor at a commit" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 
-# The runner every required check uses: the light self-hosted pool on metal-02 only for
-# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
-hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
-RUNNER
-)
+# Every required check uses the self-hosted metal pool for every repository visibility.
+metal='    runs-on: [self-hosted, Linux, metal]'
 
 # The required workflow always enforces, on pull requests, on that runner.
 wf="$here/.github/workflows/file-lengths.yml"
@@ -221,15 +217,14 @@ run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no repo
 run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, --ci against the base" 0
-run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only for private and internal repositories" 0
-# Every workflow's runner, exactly: commit-count, org-hooks and this repository's own tests
-# hold no checkout credentials and always run GitHub-hosted.
+run grep -n -x -F "$metal" "$wf"; expect "required workflow: self-hosted metal for every repository visibility" 0
+# Every workflow has exactly one runner selector, with no hosted fallback.
 runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }
 run runners
-[ "$out" = "$(printf '%s\n' "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
-  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "org-hooks.yml:    runs-on: ubuntu-latest" \
-  "path-collisions.yml:$hybrid" \
-  "pr-title.yml:$hybrid" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
+[ "$out" = "$(printf '%s\n' "commit-count.yml:$metal" "commit-size.yml:$metal" \
+  "crate-tokens.yml:$metal" "file-lengths.yml:$metal" "org-hooks.yml:$metal" \
+  "path-collisions.yml:$metal" \
+  "pr-title.yml:$metal" "tests.yml:$metal")" ] && rc=0 || rc=1
 expect "every workflow runs on its intended runner and no other" 0
 
 # The required workflow embeds this exact script.
