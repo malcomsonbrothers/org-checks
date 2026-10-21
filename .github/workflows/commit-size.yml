@@ -45,7 +45,7 @@ permissions:
 
 jobs:
   commit-size:
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    runs-on: [self-hosted, Linux, metal]
     timeout-minutes: 15
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace

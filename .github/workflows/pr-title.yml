@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   pr-title:
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    runs-on: [self-hosted, Linux, metal]
     timeout-minutes: 2
     steps:
       - name: Check the pull request title

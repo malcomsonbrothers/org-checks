@@ -4,7 +4,7 @@
 # branch, staging or <project>/staging (one folder segment) may hold at most 95. The
 # commit-count-exception label allows more; required workflows ignore labeled events, so close
 # and reopen the pull request to re-run.
-# GitHub-hosted: it reads only the event and holds no credentials.
+# Runs on the org self-hosted metal runners; reads only the event and holds no credentials.
 
 name: Commit Count
 
@@ -18,7 +18,7 @@ jobs:
   commit-count:
     # endsWith also matches a/b/staging; the shell gate below keeps only one folder segment.
     if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging' || endsWith(github.event.pull_request.base.ref, '/staging')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, metal]
     timeout-minutes: 2
     steps:
       - name: Count the pull request's commits

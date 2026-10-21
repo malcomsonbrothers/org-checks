@@ -6,7 +6,7 @@
 # (GUARD_BLOB_PREVIOUS, which guards a single-project repository the same way), and an
 # executable .githooks/pre-push that calls it. Fix: run scripts/install-hooks.sh. It runs on pull
 # requests into the default branch, staging or <project>/staging (one folder segment).
-# GitHub-hosted: it reads only the pull request head and holds no credentials beyond the
+# Runs on the org self-hosted metal runners; reads only the pull request head and holds no credentials beyond the
 # read-only job token.
 
 name: Org Hooks
@@ -22,7 +22,7 @@ jobs:
   org-hooks:
     # endsWith also matches a/b/staging; the shell gate below keeps only one folder segment.
     if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging' || endsWith(github.event.pull_request.base.ref, '/staging')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, metal]
     timeout-minutes: 5
     steps:
       - name: Only pull requests into the default branch, staging or <project>/staging
