@@ -78,6 +78,16 @@ cfg .release-guard 'warn 3' 'refuse 3'; push other/swarm/run; expect "the root .
 mark a/b/swarm/run; mark a/b/staging; push a/b/swarm/run new/swarm/run; quiet
 expect "nested or untracked <p>/swarm/run is not counted" 0
 
+# A sync merge of the default branch into staging is not a release: count from the newest
+# non-merge commit on staging's first-parent chain (for a project, touching projects/<p>/).
+repo sync; proj movopop; mark movopop/swarm/run; mark swarm/run; mark staging; mark movopop/staging
+git checkout -q -b side; commits 1; git checkout -q master; commits 78; git checkout -q -b st origin/staging
+commits 1; day=$((day + 1)); GIT_COMMITTER_DATE="@$((1767225600 + day * 86400)) +0000" git merge -q --no-ff -m sync side
+mark movopop/staging; mark staging; git checkout -q master; commits 1; push movopop/swarm/run
+expect "a sync merge on <p>/staging is not a release" 0 '80 unreleased commits on movopop/swarm/run'
+expect "nor are commits outside projects/<p>/" 0 'counted since origin/movopop/staging at 2026-01-03T'
+push swarm/run; quiet; expect "staging counts from its newest non-merge commit" 0
+
 # The org-hooks workflow runs on the default branch, staging and <p>/staging only. It accepts
 # this guard, and the previous copy only in a repository without projects/.
 wf="$here/.github/workflows/org-hooks.yml"
