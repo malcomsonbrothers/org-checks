@@ -297,17 +297,20 @@ git config core.hooksPath .githooks   # once per clone
 ```
 
 The guard is local only, so the swarm never waits for CI. A push to
-`swarm/run` counts the commits made since the head of `origin/staging`
-(else the default branch) was committed: from 80 it warns, from 150 it
+`swarm/run` counts the commits made since the newest release on
+`origin/staging` (else the default branch) was committed: the newest
+non-merge commit on its first-parent chain, so a sync merge of the default
+branch into staging is not a release. From 80 it warns, from 150 it
 refuses the push. Cut a staging release to clear it, and `git fetch` if
 `origin/staging` is stale. A repository's `.release-guard` may only lower
 the thresholds, with `warn <n>` and `refuse <n>` lines. A push to
 `<project>/swarm/run` counts against `origin/<project>/staging` the same
-way when the pushed commit has a `projects/<project>/` folder, and
+way when the pushed commit has a `projects/<project>/` folder (its newest
+release being the newest such commit touching `projects/<project>/`), and
 `projects/<project>/.release-guard` may lower its thresholds too. In a
 repository without `projects/` the check also accepts the previous guard
-(`GUARD_BLOB_PREVIOUS`, until the next pin bump after 2026-10-18), which
-guards it the same way; otherwise every repository must reinstall when the
+(`GUARD_BLOB_PREVIOUS`, until the next pin bump after 2026-10-21), which
+guards it the same way but counts from a sync merge; otherwise every repository must reinstall when the
 guard changes here and the ruleset pin moves. After changing `scripts/hooks/pre-push-guards.sh`, update
 `GUARD_BLOB` in `org-hooks.yml` and run `scripts/install-hooks.sh` here;
 `scripts/check-org-hooks-pin.sh` fails until both match.

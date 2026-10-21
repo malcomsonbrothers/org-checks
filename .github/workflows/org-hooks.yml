@@ -45,9 +45,9 @@ jobs:
       - name: Check the org pre-push guards
         if: steps.gate.outputs.run == 'true'
         env:
-          GUARD_BLOB: c270746122977721a82d5ee2c851da4bdee0d32c
-          # Accepted only without projects/; remove at the next pin bump after 2026-10-18.
-          GUARD_BLOB_PREVIOUS: 802dcf02bd403a969a749bab9cc0ebb9b261318f
+          GUARD_BLOB: 81c68dd7e50c70cb56fccca557895db3240fd079
+          # Accepted only without projects/; remove at the next pin bump after 2026-10-21.
+          GUARD_BLOB_PREVIOUS: c270746122977721a82d5ee2c851da4bdee0d32c
         run: |
           set -euo pipefail
           guard=.githooks/org/pre-push-guards.sh
