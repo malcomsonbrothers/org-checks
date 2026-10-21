@@ -23,8 +23,8 @@ cfg() { printf '%s\n' "$@" > .crate-tokens; }
 save() { git add -A && git commit -q --no-verify -m "${1:-c}"; }
 run() { out=$("$@" 2>&1) && rc=0 || rc=$?; }
 check() { run uv run --no-config --quiet --script "$here/scripts/check-crate-tokens.py" "$@"; }
-units() { check --report; printf '%s\n' "$out" | awk 'NR > 1 { print $3 }' | sort | tr '\n' ' '; }
-tokens() { check --report; printf '%s\n' "$out" | awk -v u="$1" '$3 == u { print $1 }'; }
+units() { check --report; printf '%s\n' "$out" | awk 'NR > 1 { print $4 }' | sort | tr '\n' ' '; }
+tokens() { check --report; printf '%s\n' "$out" | awk -v u="$1" '$4 == u { print $1 }'; }
 expect() { # expect NAME RC [PATTERN that must appear in the output]
   if [ "$rc" = "$2" ] && { [ -z "${3:-}" ] || printf '%s\n' "$out" | grep -q -e "$3"; }; then
     passed=$((passed + 1))
@@ -84,6 +84,27 @@ cfg 'exempt core/*/huge.rs'; check; expect "exempt glob, one segment" 0
 cfg 'exempt *.rs'; check; expect "* does not cross /" 1 '\[FAIL\] core:'
 cfg 'exempt **/huge.rs'; check; expect "**/ matches any depth" 0
 git ls-files --others --exclude-standard | grep -q vendor || expect "untracked files are counted" x
+
+# Database migrations (.sql under a migrations or migrate directory) are left out and shown
+# in --report; other SQL, and other files in migrations, still count.
+migrated() { check --report; printf '%s\n' "$out" | awk -v u="$1" '$4 == u { print $3 }'; }
+repo migrations; crate api; small api/src/lib.rs; save
+base=$(tokens api)
+big api/migrations/20260101_init.sql; big api/migrations/20260102_more.up.SQL
+big api/prisma/migrations/20260103_x/migration.sql; big api/db/migrate/0004_goose.sql
+save; same "migrations add nothing" "$(tokens api)" "$base"
+check; expect "migrations pass" 0
+[ "$(migrated api)" -gt 200000 ] && rc=0 || rc=1; expect "report shows the migration tokens" 0
+check --report; expect "report has a migrations column" 0 '^  tokens  files migrations  unit$'
+crate other; small other/src/lib.rs; same "a unit without migrations shows 0" "$(migrated other)" 0
+repo sqlcode; crate api; big api/src/queries.sql; save
+check; expect "SQL outside a migrations directory counts" 1 '\[FAIL\] api:'
+same "and is not shown as migration" "$(migrated api)" 0
+repo pymig; crate api; big api/migrations/0001_init.py; save
+check; expect "non-SQL files in migrations count" 1 '\[FAIL\] api:'
+repo lookalike; crate api; big api/my-migrations/a.sql; big api/migrations.sql/a.rs; save
+check; expect "only a directory named exactly migrations" 1 '\[FAIL\] api:'
+check --help; expect "help documents the rule" 0 'named exactly "migrations" or "migrate"'
 
 # Baseline rows grandfather a unit at its count.
 repo baseline; crate big; big big/src/lib.rs; save
@@ -155,9 +176,9 @@ printf '%s\n' "$out" | grep -q 'needs the crate-tokens-exception label' || expec
 run env CRATE_TOKENS_ENGINE="$here/scripts/check-crate-tokens.py" bash -s -- --print-baseline \
   < "$here/scripts/check-crate-tokens.sh"
 expect "the wrapper works piped into bash" 0 '^baseline a [0-9]*$'
-run "$here/scripts/check-crate-tokens.sh" --report; expect "the wrapper runs the engine beside it" 0 'tokens  files  unit'
+run "$here/scripts/check-crate-tokens.sh" --report; expect "the wrapper runs the engine beside it" 0 'tokens  files migrations  unit'
 cfg 'nonsense'; check --print-baseline; expect "config errors fail print-baseline" 1 'unknown or malformed'
-cfg; check --report; expect "report lists units" 0 '^  tokens  files  unit$'
+cfg; check --report; expect "report lists units" 0 '^  tokens  files migrations  unit$'
 check --bogus; expect "unknown mode" 2 usage
 
 # Every required check uses the self-hosted metal pool for every repository visibility.

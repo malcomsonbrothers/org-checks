@@ -111,6 +111,27 @@ so on), the org-vendored `.githooks/org/`, anything under `target`, `node_module
 directories, files that say `@generated` or `DO NOT EDIT` in their first
 kilobyte, binaries, symlinks and submodules.
 
+Database migrations are never counted either, whether old or new. A
+migration is a file whose name ends in `.sql` (in any case) with a
+directory named exactly `migrations` or `migrate` somewhere above it. That
+covers the layouts in the organisation (sqlx `crates/<c>/migrations/*.sql`
+and `backend/crates/data/db/migrations/*.up.sql` / `*.down.sql`, plain
+top-level `migrations/*.sql`) and the usual SQL tools elsewhere: goose,
+dbmate, Prisma (`prisma/migrations/<id>/migration.sql`) and Drizzle when
+its output folder is `migrations`. Everything else still counts:
+
+- a `.sql` file outside such a directory (queries, seeds, scripts)
+- any other file inside one, such as `.rs`, `.ts` or `.py`. Migrations
+  written in a general-purpose language (Alembic `versions/*.py`, Rails
+  `db/migrate/*.rb`, TypeScript migration classes) are ordinary code that
+  can hold any logic, so they stay in the budget. No repository in the
+  organisation uses one today.
+
+`--report` lists the tokens left out per unit in its `migrations` column,
+and `--help` prints the rule. The file length check is unchanged: every new
+migration keeps the 250-line SQL limit, and oversized old ones stay
+grandfathered by their `.file-lengths` baseline rows.
+
 ### `.crate-tokens`
 
 Without a `.crate-tokens` file at the repository root every unit gets the
@@ -150,7 +171,8 @@ failure output prints the same instructions.
 It prints a `baseline <unit> <tokens>` row for every unit over the limit,
 at its current count, including units already in `.crate-tokens`, so
 delete existing `baseline` rows first. Add `exempt` lines before running
-it. `--report` lists every unit's count, largest first.
+it. `--report` lists every unit's count, largest first, with the migration
+tokens left out of each.
 `scripts/check-crate-tokens.sh` is a thin wrapper that runs
 `scripts/check-crate-tokens.py` through uv (downloading it from this
 repository's `master` when piped from curl); run either directly in a clone.
