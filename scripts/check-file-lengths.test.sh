@@ -65,6 +65,14 @@ done
 { echo '#!/usr/bin/env python3'; body 400; } > tool; lines 300 Makefile
 check; expect "non-shell shebang and Makefile are not limited" 0
 
+# Database migrations keep the SQL limit (only the crate token check leaves them out); an old
+# oversized one stays grandfathered by its baseline row.
+repo migrations; lines 300 crates/api/migrations/0001_old.sql; cfg 'baseline crates/api/migrations/0001_old.sql 300'; save
+check; expect "grandfathered migration holds" 0
+lines 300 crates/api/migrations/0002_new.sql; git add -A
+check --staged; expect "a new 300-line migration fails" 1 'crates/api/migrations/0002_new.sql: 300 lines, limit 250'
+save; check --ci HEAD~1; expect "a new 300-line migration fails in CI" 1 '0002_new.sql: 300 lines, limit 250'
+
 # A final line without a newline counts, in every mode.
 repo nonl; lines 600 a.rs; printf 'last' >> a.rs; git add a.rs
 check --staged; expect "no trailing newline, staged" 1 'a.rs: 601'
