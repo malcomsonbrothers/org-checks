@@ -10,7 +10,9 @@
 # belongs to the deepest unit that contains it; files outside every unit are not counted.
 #   check-crate-tokens.py                  every unit, working tree (tracked and untracked,
 #                                          not ignored)
-#   check-crate-tokens.py --report         every unit's count, largest first
+#   check-crate-tokens.py --report         every unit's count, largest first, and the
+#                                          migration tokens left out of it
+#   check-crate-tokens.py --help           this text
 #   check-crate-tokens.py --print-baseline "baseline <unit> <tokens>" for every unit over
 #                                          the limit
 #   check-crate-tokens.py --ci BASE        the working tree, and .crate-tokens may not add
@@ -32,6 +34,12 @@
 # OpenAPI and Swagger documents (openapi*.json, swagger*.yaml and so on), the org-vendored .githooks/org/, anything under target, node_modules, dist, build, .svelte-kit, .next, coverage,
 # .sqlx or openapi directories, files that say "@generated" or "DO NOT EDIT" near
 # the top, binaries, symlinks and submodules.
+# Database migrations are never counted either: a file whose name ends in .sql (any case)
+# with a directory named exactly "migrations" or "migrate" anywhere above it (sqlx, goose,
+# dbmate, Prisma's migrations/<id>/migration.sql). Migrations in a general-purpose language
+# (Alembic versions/*.py, Rails db/migrate/*.rb, TypeScript migrations) still count, as does
+# any .sql file outside such a directory. --report shows the tokens left out per unit; the
+# file length check still applies to every migration.
 import json
 import os
 import re
@@ -51,6 +59,7 @@ SKIP_DIRS = {
     "coverage", ".sqlx", "openapi",
 }
 VENDORED = (".githooks/org/",)  # the org pre-push guard, vendored by org-checks
+MIGRATION_DIRS = {"migrations", "migrate"}
 API_SPEC = re.compile(r"(openapi|swagger)[^/]*\.(json|ya?ml)\Z", re.IGNORECASE)
 GENERATED_MARK = re.compile(rb"@generated|DO NOT EDIT")
 PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?\r?$", re.MULTILINE)
@@ -161,6 +170,12 @@ def skipped(path, exempt_res):
     return any(r.match(path) for r in exempt_res)
 
 
+def migration(path):
+    """A database migration: a .sql file under a directory named migrations or migrate."""
+    parts = path.split("/")
+    return parts[-1].lower().endswith(".sql") and any(p in MIGRATION_DIRS for p in parts[:-1])
+
+
 def read(path):
     if os.path.islink(path) or not os.path.isfile(path):
         return None  # symlink, submodule, or tracked but deleted
@@ -226,7 +241,7 @@ def measure(exempt):
     paths = sorted(set(filter(None, out.decode("utf-8", "surrogateescape").split("\0"))))
     units = discover(paths)
     exempt_res = [glob_re(g) for g in exempt]
-    owners, texts = [], []
+    owners, texts, kinds = [], [], []
     for p in paths:
         u = owner(p, units)
         if u is None or skipped(p, exempt_res):
@@ -239,15 +254,17 @@ def measure(exempt):
         except UnicodeDecodeError:
             continue
         owners.append(u)
-    counts = {u: [0, 0] for u in units}
+        kinds.append(2 if migration(p) else 0)
+    counts = {u: [0, 0, 0] for u in units}  # counted tokens, counted files, migration tokens
     if texts:
         import tiktoken
 
         enc = tiktoken.get_encoding("o200k_base")
-        for u, toks in zip(owners, enc.encode_ordinary_batch(texts)):
-            counts[u][0] += len(toks)
-            counts[u][1] += 1
-    return {escape(u): ((raw * 3 + 1) // 2, files) for u, (raw, files) in counts.items()}
+        for u, k, toks in zip(owners, kinds, enc.encode_ordinary_batch(texts)):
+            counts[u][k] += len(toks)
+            counts[u][1] += not k
+    return {escape(u): ((raw * 3 + 1) // 2, files, (mig * 3 + 1) // 2)
+            for u, (raw, files, mig) in counts.items()}
 
 
 def default_branch():
@@ -293,9 +310,15 @@ def main(argv):
     for stream in (sys.stdout, sys.stderr):  # non-UTF-8 paths print as escapes, not a crash
         stream.reconfigure(errors="backslashreplace")
     mode = argv[0] if argv else "all"
+    if mode in ("-h", "--help") and len(argv) == 1:
+        with open(__file__, encoding="utf-8") as f:
+            lines = f.read().split("# ///\n", 2)[-1].splitlines()
+        for line in lines[: next(i for i, x in enumerate(lines) if not x.startswith("#"))]:
+            print(line[2:])
+        return 0
     if mode not in ("all", "--report", "--print-baseline", "--ci") or (mode == "--ci") != (len(argv) == 2) \
             or (mode != "--ci" and len(argv) > 1):
-        print("usage: check-crate-tokens.py [--report | --print-baseline | --ci BASE]", file=sys.stderr)
+        print("usage: check-crate-tokens.py [--help | --report | --print-baseline | --ci BASE]", file=sys.stderr)
         return 2
     os.chdir(git("rev-parse", "--show-toplevel").decode().strip())
     try:
@@ -306,9 +329,9 @@ def main(argv):
         return 1
     counts = measure(exempt)
     if mode == "--report":
-        print(f"{'tokens':>8} {'files':>6}  unit")
-        for u, (n, f) in sorted(counts.items(), key=lambda kv: (-kv[1][0], kv[0])):
-            print(f"{n:>8} {f:>6}  {u}")
+        print(f"{'tokens':>8} {'files':>6} {'migrations':>10}  unit")
+        for u, (n, f, m) in sorted(counts.items(), key=lambda kv: (-kv[1][0], kv[0])):
+            print(f"{n:>8} {f:>6} {m:>10}  {u}")
         return 0
     if mode == "--print-baseline":
         for u in sorted(counts):
