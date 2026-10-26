@@ -154,9 +154,16 @@ jobs:
           set -euo pipefail
           export LC_ALL=C
 
-          # Org default limits. Extension-less files whose shebang runs sh, bash or zsh get 250.
-          org_limits="600 rs svelte ts tsx js jsx mjs cjs mts cts py css scss swift go kt;250 sh bash zsh sql"
-          shell_limit=250
+          # Org limits by extension: the lower-cased text after the last dot, ignoring leading dots (.eslintrc.js is js). A
+          # file without an org extension takes its shebang interpreter's limit (below: "<extension> <interpreters...>";
+          # version suffixes such as python3.12 are dropped; env, its options and npx, bunx and uv run are looked through).
+          org_limits="600 rs svelte ts tsx js jsx mjs cjs mts cts py pyw pyi css scss sass swift go kt kts;250 sh bash zsh ksh bats sql"
+          shebangs="sh sh bash zsh dash ash ksh mksh bats;py python pypy uv;js node nodejs bun zx;ts deno ts-node tsx;swift swift;kt kotlin"
+          lib='function ext(p) { sub(/.*\//, "", p); sub(/^\.+/, "", p); if (p !~ /\.[^.]+$/) return ""; sub(/.*\./, "", p); return tolower(p) }
+            function lang(l,   t, i, k, w) { sub(/\r$/, "", l); if (l !~ /^#!/) return ""; k = split(substr(l, 3), t, /[ \t]+/)
+              for (i = 1; i <= k; i++) { w = t[i]; if (w ~ /^-|=/) continue; sub(/.*\//, "", w); sub(/[0-9.]+$/, "", w)
+                if (w != "" && w !~ /^(env|npx|bunx|run)$/) return (w in via) ? via[w] : "" }; return "" }
+            BEGIN { _n = split(sb, _r, ";"); for (_i = 1; _i <= _n; _i++) { _k = split(_r[_i], _w, " "); for (_j = 2; _j <= _k; _j++) via[_w[_j]] = _w[1] } }'
 
           cd "$(git rev-parse --show-toplevel)"
           config=.file-lengths
@@ -219,7 +226,7 @@ jobs:
                 else if ($1 == "limit") {
                   if ($2 !~ /^[0-9]+$/ || NF < 3) { err("expected: limit <max lines> <extensions...>"); return }
                   for (j = 3; j <= NF; j++) {
-                    e = $j; sub(/^\./, "", e)
+                    e = tolower($j); sub(/^\./, "", e)
                     if (e in orgl) err("limit for ." e " is set org-wide to " orgl[e] " lines in the shared check; a repo may not change it")
                     else print "L " e " " $2 " " cfg
                   }
@@ -240,30 +247,24 @@ jobs:
               }'
           }
 
-          # Prints "lines<TAB>shebang-is-shell<TAB>path" for each non-empty file named on stdin
-          # (newline separated, relative to the current directory).
+          # Prints "lines<TAB>shebang language<TAB>path" for each non-empty file named on stdin (newline separated, relative
+          # to the current directory) that has a limited extension or a known shebang. A lone carriage return ends a line too.
           count_files() {
-            sed 's|^|./|' | tr '\n' '\0' | xargs -0 -r awk '
+            sed 's|^|./|' | tr '\n' '\0' | xargs -0 -r awk -v sb="$shebangs" -v rules="$tmp/rules" "$lib"'
+              BEGIN { while ((getline r < rules) > 0) { split(r, w, " "); if (w[1] == "O" || w[1] == "L") lim[w[2]] = 1 } }
               FNR == 1 { if (p != "") print n "\t" s "\t" p
-                p = substr(FILENAME, 3); l = $0; sub(/\r$/, "", l)
-                s = (l ~ /^#![ \t]*[^ \t]*\/(env[ \t]+(-S[ \t]+)?)?(sh|bash|zsh)([ \t]|$)/) ? 1 : 0 }
-              { n = FNR }
+                p = substr(FILENAME, 3); n = 0; s = lang($0); if (s == "" && !(ext(p) in lim)) { p = ""; nextfile } }
+              { n++ } index($0, "\r") { n += gsub(/\r/, "\r") - ($0 ~ /\r$/) }
               END { if (p != "") print n "\t" s "\t" p }'
           }
 
-          # Keeps paths (stdin) that have a limited extension or no extension and are not exempt.
+          # Keeps paths (stdin) that are not exempt.
           candidates() {
-            awk -v rules="$tmp/rules" '
-              BEGIN { while ((getline r < rules) > 0) { split(r, w, " ")
-                if (w[1] == "O" || w[1] == "L") lim[w[2]] = 1; else if (w[1] == "E") ex[w[2]] = 1 } }
-              { b = $0; sub(/.*\//, "", b); e = ""
-                if (b ~ /^[^.].*\.[^.]+$/) { e = b; sub(/.*\./, "", e) }
-                if (e != "" && !(e in lim)) next; for (re in ex) if ($0 ~ re) next
-                print }'
+            awk -v rules="$tmp/rules" 'BEGIN { while ((getline r < rules) > 0) { split(r, w, " "); if (w[1] == "E") ex[w[2]] = 1 } }
+              { for (re in ex) if ($0 ~ re) next; print }'
           }
 
-          # Copies regular-file blobs ("mode sha<TAB>path" on stdin, for paths in $tmp/want) into
-          # $tmp/t, then counts them there.
+          # Copies regular-file blobs ("mode sha<TAB>path" on stdin, for paths in $tmp/want) into $tmp/t, then counts them there.
           count_blobs() {
             local meta mode sha p
             mkdir -p "$tmp/t"
@@ -315,16 +316,14 @@ jobs:
           esac
 
           status=0
-          awk -F '\t' -v staged="$([ "$mode" = --staged ] && echo 1 || echo 0)" -v sl="$shell_limit" \
-            -v pb="$([ "$mode" = --print-baseline ] && echo 1 || echo 0)" '
-            FILENAME == ARGV[1] { split($0, w, " ")
+          awk -F '\t' -v staged="$([ "$mode" = --staged ] && echo 1 || echo 0)" -v sb="$shebangs" \
+            -v pb="$([ "$mode" = --print-baseline ] && echo 1 || echo 0)" "$lib"'
+            FILENAME == ARGV[1] { split($0, w, " "); if (w[1] == "O") org[w[2]] = 1
               if (w[1] == "O" || w[1] == "L") lim[w[2]] = w[3]; else if (w[1] == "B") row[w[2]] = w[3]
               else if (w[1] == "X") { sub(/^X /, ""); m = "[FAIL] " $0; if (pb) print m > "/dev/stderr"; else print m; bad = 1 }
               next }
             FILENAME == ARGV[2] { have[$0] = 1; next }
-            { n = $1; p = $3; b = p; sub(/.*\//, "", b); e = ""
-              if (b ~ /^[^.].*\.[^.]+$/) { e = b; sub(/.*\./, "", e) }
-              max = e != "" ? lim[e] : ($2 == 1 ? sl : "")
+            { n = $1; p = $0; sub(/^[^\t]*\t[^\t]*\t/, "", p); e = ext(p); max = lim[(e in org) || $2 == "" ? e : $2]
               if (pb) { if (max != "" && n > max) print "baseline " p " " n; next }
               if (max == "") { if (p in row) { print "[FAIL] " p ": baseline row for a file with no limit, delete it"; bad = 1 }; next }
               if (p in row) {

@@ -35,7 +35,7 @@ repo shebang; for s in '/bin/sh' '/usr/bin/env bash' '/usr/bin/env -S bash -eu' 
   check; expect "shebang $s" 1 'tool: 251 lines, limit 250'
 done
 { echo '#!/usr/bin/env python3'; body 400; } > tool; lines 300 Makefile
-check; expect "non-shell shebang and Makefile are not limited" 0
+check; expect "a 401-line python script and a Makefile pass" 0
 
 # Database migrations keep the SQL limit (only the crate token check leaves them out); an old
 # oversized one stays grandfathered by its baseline row.

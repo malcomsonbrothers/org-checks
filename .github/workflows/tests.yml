@@ -26,6 +26,9 @@ jobs:
       - name: Test the file length check and its hooks
         run: scripts/check-file-lengths.test.sh
 
+      - name: Test that covered languages cannot escape the file length check
+        run: scripts/check-file-lengths-languages.test.sh
+
       - name: Test the commit size check
         run: scripts/check-commit-size.test.sh
 
