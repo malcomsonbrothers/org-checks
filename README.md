@@ -19,9 +19,26 @@ any violation fails the pull request.
 The organisation limits are fixed in `scripts/check-file-lengths.sh`, and no
 repository can change them:
 
-- 600 lines: `rs svelte ts tsx js jsx mjs cjs mts cts py css scss swift go kt`
-- 250 lines: `sh bash zsh sql`, plus extension-less files whose shebang runs
-  sh, bash or zsh
+- 600 lines: `rs svelte ts tsx js jsx mjs cjs mts cts py pyw pyi css scss
+  sass swift go kt kts`
+- 250 lines: `sh bash zsh ksh bats sql`
+
+A file's extension is the text after its last dot, in any case, ignoring
+leading dots (`.eslintrc.js` is `js`, `BIG.PY` is `py`, `.bashrc` has none).
+A file with no extension, or one outside the lists above, whose shebang runs
+a covered language takes that language's limit, even where `.file-lengths`
+sets a limit for its extension:
+
+- 250 lines: `sh bash zsh dash ash ksh mksh bats`
+- 600 lines: `python pypy uv` (`uv run --script`), `node nodejs bun zx`,
+  `deno ts-node tsx`, `swift`, `kotlin`
+
+Version suffixes are dropped (`python3.12` is `python`), and `env` with its
+options and assignments, `npx`, `bunx` and `run` are looked through, so
+`#!/usr/bin/env -S python3 -I` and `#!/usr/bin/env -S npx tsx` both count.
+Interpreters of languages without an organisation limit (perl, ruby and so
+on) leave a file unlimited. A carriage return on its own ends a line, as a
+newline does; CRLF counts once.
 
 ### `.file-lengths`
 
