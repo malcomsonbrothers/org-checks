@@ -274,29 +274,35 @@ Candidate required workflow: `.github/workflows/no-media.yml`
 git: user-facing assets go to R2 and are loaded from the CDN, test fixtures
 go to the local test corpus. Favicons and app icons are the exception.
 
-It compares the pull request's merge commit with its base, so files already
-in the repository never fail it. Every added, modified, copied or renamed
-file (renames detected, so a move counts at its new path) fails when it is:
+It checks every commit from the base to the pull request head, as the
+commit size check does, so files already in the repository never fail it
+and media added in one commit and deleted in the next still fails (rebase
+merges keep every commit). Commits already on the default branch are
+skipped, and a merge counts only files that differ from every parent. Every
+added, modified, copied or renamed file (renames detected, so a move counts
+at its new path) fails when it is:
 
 - media by extension: images `png jpg jpeg webp gif avif heic heif bmp tif
-  tiff ico psd`, video `mp4 mov webm mkv avi m4v`, audio `wav mp3 m4a aac
-  ogg oga flac opus`
+  tiff ico psd jxl`, video `mp4 mov webm mkv avi m4v mpg mpeg wmv flv 3gp`,
+  audio `wav mp3 m4a aac ogg oga flac opus aif aiff wma`
 - an SVG over 20 KB
-- media by content, whatever its extension (PNG, JPEG, GIF, WebP, WAV, AVI,
-  ISO media such as MP4, MOV, M4A, HEIC and AVIF, Matroska and WebM, Ogg,
-  FLAC, MP3 with ID3, PSD, TIFF)
+- media by content, whatever its extension (PNG, JPEG, GIF, WebP, ICO, BMP,
+  TIFF, JPEG XL, PSD, WAV, AVI, AIFF, ISO media such as MP4, MOV, M4A, 3GP,
+  HEIC and AVIF, Matroska and WebM, Ogg, FLAC, ASF, FLV, MPEG video, MP3
+  with ID3 and MPEG or AAC frame sync)
 - a Git LFS pointer of any kind: LFS is not a way round the rule
 
 Favicons and app icons up to 64 KB pass without config: images named
 `favicon.*`, `apple-touch-icon*`, `apple-icon*`, `icon.*`, `icon-*`,
 `android-chrome-*` or `mstile-*`, any `.ico`, and images in an
-`.appiconset` folder. Deleting media, or changing only its mode, counts
+`.appiconset` folder, whose content is an image or plain SVG (so an MP3
+named `icon-x.png` still fails). Deleting media, or changing only its mode, counts
 nothing.
 
 ### `.media-allow`
 
 Anything else needs a row in `.media-allow` at the repository root, read at
-the merge commit, one per line (`#` starts a comment):
+the pull request head, one per line (`#` starts a comment):
 
 - `allow <glob> <reason>` with the same glob syntax as `.file-lengths` and a
   short reason, for example
