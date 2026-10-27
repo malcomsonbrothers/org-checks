@@ -270,7 +270,8 @@ scripts/check-commit-size.sh origin/main HEAD
 ## No binaries
 
 Candidate required workflow: `.github/workflows/no-binaries.yml`
-(GitHub-hosted, no credentials). Binaries do not belong in git, and neither
+(GitHub-hosted, no credentials). Adding it to the organisation ruleset is
+an owner step. Binaries do not belong in git, and neither
 do media, 3D and Blender files, model weights, archives, compiled code,
 databases, documents, secrets or junk. User-facing assets go to R2 and are
 loaded from the CDN, test fixtures go to the local test corpus, secrets go
@@ -287,16 +288,20 @@ at its new path) fails when:
 
 1. it is binary: a NUL byte in its first 8 KB (git's own test, with
    `.gitattributes` ignored), or media by its first bytes whatever its
-   extension, or any Git LFS pointer
+   extension (magics that are plain ASCII, such as `ID3` or `GIF8`, only
+   count in a file with a NUL byte, so text may start with them), or any
+   Git LFS pointer
 2. its name or a folder above it is on the org lists, even when the file is
    text or an LFS pointer: media, Blender and 3D (with `.blend1` to
    `.blend32` backups and autosaves), Blender caches and textures, model
    weights, archives, compiled code, databases, office documents and PDF,
    secrets (keys, `.env` and `.env.*` but not `.env.example`, Terraform
    state, and `.npmrc` or `.pypirc` holding a literal token), junk
-   (`.DS_Store`, `.orig`, `.bak`, `*~` and so on), fonts, and files under
-   `node_modules`, `__pycache__`, `.venv`, `target`, `dist`, `build`,
-   `.svelte-kit` or `.terraform`
+   (`.DS_Store`, `.orig`, `.bak`, `*~` and so on), fonts, files under
+   `node_modules`, `__pycache__`, `.venv`, `.svelte-kit` or `.terraform`
+   at any depth, and under `target`, `dist` or `build` at the repository
+   root or a `projects/<p>/` root only (deeper down they are ordinary
+   source folders, such as `crates/build`)
 3. it is over 1 MB, of any kind
 4. it is an SVG over 20 KB
 

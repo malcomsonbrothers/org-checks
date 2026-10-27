@@ -151,7 +151,7 @@ while IFS=$'\t' read -r sha n path; do
   h=${hx// /}; h=${h:0:128}
   tok=0
   if [[ $tokenfiles == *" ${path##*/} "* ]] && { git cat-file blob "$sha" || :; } |
-    grep -Eiq '(_authtoken|_auth|_password|password|token)[[:space:]]*[=:][[:space:]]*[^$[:space:]]'; then tok=1; fi
+    grep -Eiq "(_authtoken|_auth|_password|password|token)[[:space:]]*[=:][[:space:]]*[\"']?[^\$\"'[:space:]]"; then tok=1; fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sha" "$n" "$nul" "$h" "$tok" "$path" >> "$tmp/files"
 done < "$tmp/sized"
 shopt -u nocasematch
@@ -172,9 +172,9 @@ awk -F '\t' -v lists="$lists" -v rules="$tmp/rules" -v lfs="$lfs" -v smax="$size
       if (w[1] == "about") { d = l; sub(/^about [^ ]+ /, "", d); about[w[2]] = d }
       else if (w[1] == "deny") { nd++; dre[nd] = re(w[3]); dcat[nd] = w[2] }
       else if (w[1] == "keep") keep[re(w[2])] = 1
-      else if (w[1] == "dir") { nf++; fre[nf] = re(w[3]); fcat[nf] = w[2] }
-      else if (w[1] == "magic") { nm++; m = w[3]; sub(/\*$/, "", m); mre[nm] = re(m); sub(/\$$/, "", mre[nm]); mcat[nm] = w[2]
-        d = l; sub(/^magic [^ ]+ [^ ]+ /, "", d); mname[nm] = d }
+      else if (w[1] == "dir" || w[1] == "rootdir") { nf++; fre[nf] = re(w[3]); fcat[nf] = w[2]; froot[nf] = w[1] == "rootdir" }
+      else if (w[1] == "magic" || w[1] == "magicnul") { nm++; m = w[3]; sub(/\*$/, "", m); mre[nm] = re(m); sub(/\$$/, "", mre[nm])
+        mcat[nm] = w[2]; mnul[nm] = w[1] == "magicnul"; d = l; sub(/^magic(nul)? [^ ]+ [^ ]+ /, "", d); mname[nm] = d }
       else if (w[1] == "icon") icon[re(w[2])] = 1
       else if (w[1] == "icondir") icondir[re(w[2])] = 1
       else if (w[1] == "iconext") iconext[w[2]] = 1 }
@@ -187,10 +187,10 @@ awk -F '\t' -v lists="$lists" -v rules="$tmp/rules" -v lfs="$lfs" -v smax="$size
   { sha = $1; n = $2 + 0; nul = $3; h = $4; tok = $5; p = $6; lp = tolower(p)
     k = split(lp, seg, "/"); name = seg[k]; on = p; sub(/.*\//, "", on); ext = name ~ /^[^.].*\.[^.]+$/ ? name : ""; sub(/.*\./, "", ext)
     isl = index(h, lfs) == 1; mc = ""
-    for (i = 1; i <= nm && !isl; i++) if (h ~ mre[i]) { mc = mcat[i]; mn = mname[i]; break }
+    for (i = 1; i <= nm && !isl; i++) if (h ~ mre[i] && (nul || !mnul[i])) { mc = mcat[i]; mn = mname[i]; break }
     why = row(p, allow); if (why != "") { pass(p, "allowed by " why); next }
     cat = ""; detail = ""
-    for (j = 1; j < k && cat == ""; j++) for (i = 1; i <= nf; i++) if (seg[j] ~ fre[i]) { cat = fcat[i]; detail = "under " seg[j] "/"; break }
+    for (j = 1; j < k && cat == ""; j++) for (i = 1; i <= nf; i++) if (seg[j] ~ fre[i] && (!froot[i] || j == 1 || (j == 3 && seg[1] == "projects"))) { cat = fcat[i]; detail = "under " seg[j] "/"; break }
     isicon = 0; for (r in icon) if (name ~ r) isicon = 1; for (j = 1; j < k; j++) for (r in icondir) if (seg[j] ~ r) isicon = 1
     if (cat == "" && isicon && (ext in iconext) && !isl && n <= imax && (mc == "" || mc == "image") && !(ext == "svg" && nul)) {
       if (!(p in passed)) icons++; pass(p, "favicon or app icon, " n " bytes"); next }
