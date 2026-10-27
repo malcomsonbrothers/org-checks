@@ -267,62 +267,82 @@ of this repository or a copy of `scripts/check-commit-size.sh`:
 scripts/check-commit-size.sh origin/main HEAD
 ```
 
-## No media
+## No binaries
 
-Candidate required workflow: `.github/workflows/no-media.yml`
-(GitHub-hosted, no credentials). Images, video and audio do not belong in
-git: user-facing assets go to R2 and are loaded from the CDN, test fixtures
-go to the local test corpus. Favicons and app icons are the exception.
+Candidate required workflow: `.github/workflows/no-binaries.yml`
+(GitHub-hosted, no credentials). Binaries do not belong in git, and neither
+do media, 3D and Blender files, model weights, archives, compiled code,
+databases, documents, secrets or junk. User-facing assets go to R2 and are
+loaded from the CDN, test fixtures go to the local test corpus, secrets go
+to SSM, and build output goes in `.gitignore`. Favicons and app icons are
+the exception.
 
 It checks every commit from the base to the pull request head, as the
 commit size check does, so files already in the repository never fail it
-and media added in one commit and deleted in the next still fails (rebase
+and a file added in one commit and deleted in the next still fails (rebase
 merges keep every commit). Commits already on the default branch are
 skipped, and a merge counts only files that differ from every parent. Every
 added, modified, copied or renamed file (renames detected, so a move counts
-at its new path) fails when it is:
+at its new path) fails when:
 
-- media by extension: images `png jpg jpeg webp gif avif heic heif bmp tif
-  tiff ico psd jxl`, video `mp4 mov webm mkv avi m4v mpg mpeg wmv flv 3gp`,
-  audio `wav mp3 m4a aac ogg oga flac opus aif aiff wma`
-- an SVG over 20 KB
-- media by content, whatever its extension (PNG, JPEG, GIF, WebP, ICO, BMP,
-  TIFF, JPEG XL, PSD, WAV, AVI, AIFF, ISO media such as MP4, MOV, M4A, 3GP,
-  HEIC and AVIF, Matroska and WebM, Ogg, FLAC, ASF, FLV, MPEG video, MP3
-  with ID3 and MPEG or AAC frame sync)
-- a Git LFS pointer of any kind: LFS is not a way round the rule
+1. it is binary: a NUL byte in its first 8 KB (git's own test, with
+   `.gitattributes` ignored), or media by its first bytes whatever its
+   extension, or any Git LFS pointer
+2. its name or a folder above it is on the org lists, even when the file is
+   text or an LFS pointer: media, Blender and 3D (with `.blend1` to
+   `.blend32` backups and autosaves), Blender caches and textures, model
+   weights, archives, compiled code, databases, office documents and PDF,
+   secrets (keys, `.env` and `.env.*` but not `.env.example`, Terraform
+   state, and `.npmrc` or `.pypirc` holding a literal token), junk
+   (`.DS_Store`, `.orig`, `.bak`, `*~` and so on), fonts, and files under
+   `node_modules`, `__pycache__`, `.venv`, `target`, `dist`, `build`,
+   `.svelte-kit` or `.terraform`
+3. it is over 1 MB, of any kind
+4. it is an SVG over 20 KB
 
-Favicons and app icons up to 64 KB pass without config: images named
-`favicon.*`, `apple-touch-icon*`, `apple-icon*`, `icon.*`, `icon-*`,
+The lists are data, in `scripts/lists/no-binaries.txt`: extend one by
+adding a line (the file's header gives the format). Fonts are binary and
+are not allowed by default; a repository that ships them lists them.
+
+Favicons and app icons up to 64 KB pass without config when their content
+is an image or plain SVG (so an MP3 named `icon-x.png` still fails): images
+named `favicon.*`, `apple-touch-icon*`, `apple-icon*`, `icon.*`, `icon-*`,
 `android-chrome-*` or `mstile-*`, any `.ico`, and images in an
-`.appiconset` folder, whose content is an image or plain SVG (so an MP3
-named `icon-x.png` still fails). Deleting media, or changing only its mode, counts
-nothing.
+`.appiconset` folder. Deleting a file, or changing only its mode, counts
+nothing. A token found in `.npmrc` or `.pypirc` is never printed; the
+failure names the file only.
 
-### `.media-allow`
+### `.binary-allow`
 
-Anything else needs a row in `.media-allow` at the repository root, read at
-the pull request head, one per line (`#` starts a comment):
+Anything else needs a row in `.binary-allow` at the repository root (or
+`projects/<p>/.binary-allow`, relative to its folder), read at the pull
+request head, one per line (`#` starts a comment), with the same glob
+syntax as `.file-lengths` and a short reason:
 
-- `allow <glob> <reason>` with the same glob syntax as `.file-lengths` and a
-  short reason, for example
-  `allow assets/end-card/logo.png end-card logo burnt into every film`
+- `allow <glob> <reason>`: the path may be anything above, for example
+  `allow web/static/fonts/*.woff2 brand fonts`
+- `exempt <glob> <reason>`: a generated text file may be over 1 MB, for
+  example `exempt openapi/*.json generated OpenAPI documents`
 
-`.media-allow` may only shrink against the pull request base; rows the
+`.binary-allow` may only shrink against the pull request base; rows the
 default branch tip already has passed there and count as old too. A new row
-fails unless a reviewer adds the `media-exception` label to the pull request
-and then closes and reopens it. The label allows new rows only, never media
-without a row, so every media file in a repository names its reason.
+fails unless a reviewer adds the `binary-exception` label to the pull
+request and then closes and reopens it. The label allows new rows only,
+never a file without a row, so every binary in a repository names its
+reason.
 
 ### Fixing a pull request that fails
 
-Move the file to R2 (user-facing) or the test corpus (fixtures) and load it
-from there. If it truly must live in the repository, add an `allow` row and
-ask for the label. To check locally before pushing, from a clone of this
-repository or a copy of `scripts/check-media.sh` (bash, git, awk and od):
+Move the file where it belongs and load it from there; delete junk and
+build output and add them to `.gitignore`; remove a committed secret and
+rotate it (deleting it does not unpublish it). If a file truly must live in
+the repository, add a row and ask for the label. To check locally before
+pushing, from a clone of this repository (or a copy of
+`scripts/check-binaries.sh`, which fetches the lists from master when they
+are not beside it; it needs bash, git, awk, od and grep):
 
 ```sh
-scripts/check-media.sh origin/main HEAD
+scripts/check-binaries.sh origin/main HEAD
 ```
 
 ## Pull request titles
@@ -421,11 +441,11 @@ A repository holding several projects keeps each under `projects/<project>/`
 its own branches: `<project>/swarm/run`, `<project>/swarm/next` and
 `<project>/staging`. The checks key on the folder, not on a monorepo flag:
 any repository with a top-level `projects/<x>/.file-lengths`,
-`.commit-size`, `.crate-tokens` or `.media-allow` has it read as that
+`.commit-size`, `.crate-tokens` or `.binary-allow` has it read as that
 folder's config.
 
 - `projects/<project>/.file-lengths`, `.commit-size`, `.crate-tokens` and
-  `.media-allow` add lines with paths, globs and units relative to that folder (`.` is the
+  `.binary-allow` add lines with paths, globs and units relative to that folder (`.` is the
   folder itself). They cannot reach outside it. `limit` lines stay in the
   root `.file-lengths`. A path with rows in two files is an error.
 - Each file may only shrink against the same file at the base, so moving
@@ -449,8 +469,8 @@ After editing the script, paste it back into the workflow between
 `crate-tokens.yml` embeds `scripts/check-crate-tokens.py` in the same way,
 checked by `scripts/check-crate-tokens.test.sh` (it fetches only uv and the
 pinned tiktoken), and `commit-size.yml` embeds `scripts/check-commit-size.sh`,
-checked by `scripts/check-commit-size.test.sh`. `no-media.yml` embeds
-`scripts/check-media.sh` and `scripts/fresh-clone.sh` the same way. The tests run in `.github/workflows/tests.yml` on every
+checked by `scripts/check-commit-size.test.sh`. `no-binaries.yml` embeds
+`scripts/check-binaries.sh`, `scripts/lists/no-binaries.txt` and `scripts/fresh-clone.sh` the same way. The tests run in `.github/workflows/tests.yml` on every
 push and pull request.
 
 ### How the checks fetch the pull request
