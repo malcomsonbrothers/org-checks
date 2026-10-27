@@ -1,0 +1,340 @@
+# Org media check, a candidate required workflow
+#
+# Like file-lengths.yml, an org ruleset's "Require workflows to pass" rule can
+# point at this file in malcomsonbrothers/org-checks at a pinned commit, so it
+# runs on every pull request in every org repository, in the context of that
+# repository. It also runs on this repository's own pull requests.
+#
+# Images, video and audio belong in R2 (user-facing assets) or a local test
+# corpus (fixtures), never in git. It compares the pull request's merge commit
+# with its base and fails on every added, modified, copied or renamed file
+# that is media by extension, by content (magic bytes) or as a Git LFS
+# pointer, so files already in the repository never fail it. SVGs count only
+# above 20 KB. Favicons and app icons up to 64 KB pass without config;
+# anything else needs an `allow <glob> <reason>` row in .media-allow at the
+# merge commit (or projects/<p>/.media-allow, relative to its folder).
+#
+# .media-allow may only shrink against the pull request base (rows the
+# default branch tip has passed there and count as old too): a new row fails
+# unless the pull request has the media-exception label. Required workflows
+# ignore labeled events, so after adding it close and reopen the pull request
+# to re-run.
+#
+# It needs no credentials and runs on GitHub-hosted runners. The engine below
+# is scripts/check-media.sh, embedded so the job fetches nothing and the
+# ruleset's pinned commit pins the engine too. After editing the script, paste
+# it back between <<'ENGINE' and ENGINE indented ten spaces; likewise
+# scripts/fresh-clone.sh between <<'CLONE' and CLONE.
+
+name: No Media
+
+on:
+  pull_request:
+    # Required workflows ignore labeled/unlabeled events, so after adding the
+    # media-exception label, close and reopen the pull request to re-run.
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  no-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # A new clone in the job's temporary directory (see scripts/fresh-clone.sh,
+      # embedded like the engine: paste it back after editing).
+      - name: Fetch the pull request into a fresh clone
+        env:
+          FRESH_CLONE_TOKEN: ${{ github.token }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_MERGE: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          clone="$RUNNER_TEMP/fresh-clone.sh"
+          cat > "$clone" <<'CLONE'
+          #!/usr/bin/env bash
+          # Fetches the pull request into a new, empty repository for a required workflow, instead of
+          # trusting the runner's workspace. The self-hosted runners are shared and keep each repository's
+          # workspace between jobs, so another job may leave it blob-less (filtered), shallow or otherwise
+          # altered; actions/checkout reuses such a .git, a later read needs a blob the job can no longer
+          # fetch, and the check fails. Needs only bash and git (2.32 or later).
+          #   fresh-clone.sh DEST URL [--depth N] [--checkout COMMIT] REFSPEC...
+          # DEST is removed and created afresh, with origin at URL, then REFSPECs are fetched in one go:
+          # never with a filter, with full history unless --depth limits it. --checkout detaches HEAD at
+          # COMMIT with its files; without it there is no working tree checkout. FRESH_CLONE_TOKEN, when
+          # set, authenticates that one fetch through a header exported only for it, so it is never
+          # written to .git/config or any process's command line. The runner user's global and system git config are ignored.
+          set -euo pipefail
+          export LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+          unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+            GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+          fail() { echo "fresh-clone: $*" >&2; exit 2; }
+          usage="usage: fresh-clone.sh DEST URL [--depth N] [--checkout COMMIT] REFSPEC..."
+
+          [ $# -ge 2 ] || fail "$usage"
+          dest=$1 url=$2; shift 2
+          depth=() commit=""
+          while [ $# -gt 0 ]; do
+            case $1 in
+              --depth) [[ ${2:-} =~ ^[1-9][0-9]*$ ]] || fail "--depth needs a positive number"; depth=(--depth "$2"); shift 2 ;;
+              --checkout) [ -n "${2:-}" ] || fail "$usage"; commit=$2; shift 2 ;;
+              -*) fail "$usage" ;;
+              *) break ;;
+            esac
+          done
+          [ $# -gt 0 ] || fail "$usage"
+
+          rm -rf "$dest"
+          git init -q "$dest"
+          git -C "$dest" remote add origin "$url"
+          # The header is exported only around the fetch, never passed as an argument: the runners' users
+          # share /proc, where any process's command line is readable but its environment is not.
+          # printf and echo are builtins, so the token is in no command line here either.
+          if [ -n "${FRESH_CLONE_TOKEN:-}" ]; then
+            basic=$(printf 'x-access-token:%s' "$FRESH_CLONE_TOKEN" | base64 | tr -d '\n')
+            echo "::add-mask::$basic"
+            export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic"
+          fi
+          fetched=0
+          git -C "$dest" fetch --quiet --no-tags --no-recurse-submodules "${depth[@]}" origin "$@" && fetched=1
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 basic
+          [ "$fetched" -eq 1 ] || fail "could not fetch $* from $url"
+          if [ -n "$commit" ]; then git -C "$dest" checkout --quiet --detach "$commit" -- ||
+            fail "could not check out $commit"; fi
+
+          # The new repository must be complete: no promisor remote or filter, and full history unless
+          # --depth asked for less (a short history fetched with --depth is not shallow).
+          if git -C "$dest" config --get-regexp '^(remote\..*\.(promisor|partialclonefilter)|extensions\.partialclone)$'; then
+            fail "the new clone is a partial clone"
+          fi
+          if [ ${#depth[@]} -eq 0 ] && [ "$(git -C "$dest" rev-parse --is-shallow-repository)" != false ]; then
+            fail "the new clone is shallow"
+          fi
+          echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
+          CLONE
+          chmod +x "$clone"
+          # The engine reads only trees: the merge commit, the base and the default branch tip
+          # (for its .media-allow rows), one commit each, never with a filter.
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 \
+            "+$PR_MERGE:refs/check/merge" "+$PR_BASE:refs/check/base" \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+
+      - name: Check for media
+        working-directory: ${{ runner.temp }}/pr
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_MERGE: ${{ github.sha }}
+          MEDIA_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'media-exception') }}
+          MEDIA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          engine="$RUNNER_TEMP/check-media.sh"
+          cat > "$engine" <<'ENGINE'
+          #!/usr/bin/env bash
+          # Org-wide media check. Needs only bash, git, awk and od. Images, video and audio belong in R2
+          # (user-facing assets) or a local test corpus (fixtures), not in git. Fails when the change adds,
+          # modifies or renames into place a media file: by extension, by content (magic bytes, so a renamed
+          # extension is caught) or as a Git LFS pointer (any LFS file). SVGs count only above 20 KB. Small
+          # favicons and app icons pass without config; anything else needs an allow row. Never skips.
+          #   check-media.sh [BASE [TIP]]   files changed from the merge-base of BASE and TIP (TIP defaults to
+          #                                 HEAD) to TIP
+          #   check-media.sh --ci BASE TIP  files changed from BASE to TIP (the merge commit), and .media-allow
+          #                                 may not add rows compared with BASE or the default branch tip.
+          #                                 MEDIA_EXCEPTION=true (the PR label) allows new rows.
+          # A missing BASE falls back to the merge-base with the default branch (MEDIA_DEFAULT_BRANCH, else
+          # origin/HEAD, origin/main or origin/master); with none, every file at TIP is checked.
+          # .media-allow lines, read at TIP (# starts a comment):   allow <glob> <reason...>
+          # Globs: * is one path segment, ** any depth; other characters are literal. Each
+          # projects/<p>/.media-allow adds allow rows relative to its folder.
+          set -euo pipefail
+          export LC_ALL=C
+
+          # Org lists, fixed here: no repository can change them.
+          images=" png jpg jpeg webp gif avif heic heif bmp tif tiff ico psd "
+          video=" mp4 mov webm mkv avi m4v "
+          audio=" wav mp3 m4a aac ogg oga flac opus "
+          svg_max=20480 icon_max=65536
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+
+          cd "$(git rev-parse --show-toplevel)"
+          config=.media-allow
+          tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+          fail() { echo "no-media: $*" >&2; exit 2; }
+          usage="usage: check-media.sh [--ci] [BASE [TIP]]"
+
+          default_branch() {
+            local b d=${MEDIA_DEFAULT_BRANCH:-}
+            for b in ${d:+"origin/$d" "$d"} "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || :)" \
+              origin/main origin/master; do
+              [ -n "$b" ] && git rev-parse -q --verify "$b^{commit}" >/dev/null && { echo "$b"; return; }
+            done
+            return 0
+          }
+
+          # Turns a .media-allow text (stdin) at path CFG in commit REF, with globs relative to folder PRE,
+          # into rule records:   A regex glob config (allow row) | X error
+          parse_rules() {
+            awk -v cfg="$1" -v pre="${2:-}" -v ref="${3:-}" '
+              function glob_re(g,   r, c, i) {
+                r = ""
+                for (i = 1; i <= length(g); i++) {
+                  c = substr(g, i, 1)
+                  if (c == "*" && substr(g, i, 3) == "**/") { r = r "(.*/)?"; i += 2 }
+                  else if (c == "*" && substr(g, i, 2) == "**") { r = r ".*"; i++ }
+                  else if (c == "*") r = r "[^/]*"
+                  else if (c == "?") r = r "[^/]"
+                  else if (index("\\.[]()+{}|^$", c)) r = r "\\" c
+                  else r = r c
+                }
+                return "^" r "$"
+              }
+              { sub(/\r$/, "") }
+              /^[ \t]*(#|$)/ { next }
+              $1 == "allow" && NF >= 3 { print "A " glob_re(pre $2) " " $2 " " cfg; next }
+              { print "X " ref ":" cfg ":" NR ": unknown or malformed line (only allow <glob> <reason> is allowed): " $0 }'
+          }
+
+          # Prints the rule records of .media-allow and each projects/<p>/.media-allow at commit REF.
+          rules_at() {
+            local f
+            git ls-tree -r --name-only "$1" -- "$config" projects | awk '/^(projects\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/)?\.media-allow$/' |
+              while IFS= read -r f; do git show "$1:$f" | parse_rules "$f" "${f%"$config"}" "$1"; done
+          }
+
+          # Names the media format of the first bytes of a blob (lower-case hex), or nothing.
+          sniff() {
+            case $1 in
+              89504e47*) echo PNG ;; ffd8ff*) echo JPEG ;; 47494638*) echo GIF ;;
+              52494646????????57454250*) echo WebP ;; 52494646????????57415645*) echo WAV ;;
+              52494646????????41564920*) echo AVI ;; ????????66747970*) echo "ISO media (MP4, MOV, M4A, HEIC or AVIF)" ;;
+              1a45dfa3*) echo "Matroska (MKV or WebM)" ;; 4f676753*) echo Ogg ;; 664c6143*) echo FLAC ;;
+              494433*) echo "MP3 (ID3)" ;; 38425053*) echo PSD ;; 49492a00* | 4d4d002a*) echo TIFF ;;
+            esac
+          }
+
+          # A favicon or app icon by name: favicon.*, apple-touch-icon*, apple-icon*, icon.*, icon-*,
+          # android-chrome-*, mstile-*, any .ico, or an image in an .appiconset folder.
+          icon_name() {
+            local p=$1 n=${1##*/}
+            case $n in favicon.* | apple-touch-icon* | apple-icon* | icon.* | icon-* | android-chrome-* | mstile-* | *.ico) return 0 ;; esac
+            case $p in *.appiconset/*) return 0 ;; esac
+            return 1
+          }
+
+          ci=0
+          if [ "${1:-}" = --ci ]; then ci=1; shift; fi
+          case ${1:-} in -*) fail "$usage" ;; esac
+          [ $# -le 2 ] || fail "$usage"
+          [ "$ci" -eq 0 ] || [ $# -eq 2 ] || fail "$usage"
+          tip=$(git rev-parse -q --verify "${2:-HEAD}^{commit}") || fail "unknown commit ${2:-HEAD}"
+          base=${1:-}
+          if [ -z "$base" ]; then d=$(default_branch); base=${d:+$(git merge-base "$tip" "$d" || :)}
+          else git cat-file -e "$base^{commit}" 2>/dev/null || fail "base commit $base is not in this clone; fetch it"
+            [ "$ci" -eq 1 ] || base=$(git merge-base "$base" "$tip" || :)
+          fi
+          from=${base:-$empty_tree}
+
+          rules_at "$tip" > "$tmp/rules"
+          status=0
+          if grep -q '^X ' "$tmp/rules"; then sed -n 's/^X /[FAIL] /p' "$tmp/rules"; status=1; fi
+
+          # Every added, modified, copied or renamed regular file at TIP (renames detected, so a move counts
+          # at its new path); a mode-only change and deletions count nothing. Records: sha TAB path.
+          : > "$tmp/changed"; weird=0
+          git diff-tree -r -M --no-abbrev --raw -z "$from" "$tip" > "$tmp/raw"
+          while IFS= read -r -d '' head; do
+            read -r omode nmode osha nsha st <<< "${head#:}"
+            IFS= read -r -d '' path
+            case $st in R* | C*) IFS= read -r -d '' path ;; esac
+            case $st in D*) continue ;; esac
+            case $nmode in 100644 | 100755) ;; *) continue ;; esac
+            [ "$osha" != "$nsha" ] || [ "$omode" = 000000 ] || case $st in R* | C*) ;; *) continue ;; esac
+            if [[ $path == *$'\t'* || $path == *$'\n'* ]]; then weird=$((weird + 1)); continue; fi
+            printf '%s\t%s\n' "$nsha" "$path" >> "$tmp/changed"
+          done < "$tmp/raw"
+          if [ "$weird" -gt 0 ]; then echo "[FAIL] $weird changed path(s) contain a tab or newline; rename them"; status=1; fi
+
+          # Sizes in one call (records: sha TAB size TAB lower-case path), then each file's first 64 bytes.
+          cut -f1 "$tmp/changed" | git cat-file --batch-check='%(objectname) %(objectsize)' > "$tmp/sizes"
+          awk -F '\t' 'FILENAME == ARGV[1] { split($0, w, " "); n[w[1]] = w[2]; next } { print $1 "\t" n[$1] + 0 "\t" tolower($2) "\t" $2 }' \
+            "$tmp/sizes" "$tmp/changed" > "$tmp/files"
+          lfs=$(printf 'version https://git-lfs.github.com/spec/' | od -An -tx1 | tr -d ' \n')
+          : > "$tmp/media"; count=0 icons=0 media=0
+          while IFS=$'\t' read -r sha n lower path; do
+            count=$((count + 1))
+            h=$( { git cat-file blob "$sha" 2>/dev/null || :; } | od -An -tx1 -N64 | tr -d ' \n') || :
+            e=${lower##*/}; [[ $e == ?*.* ]] && e=${e##*.} || e=""
+            kind=""
+            if [[ $h == "$lfs"* ]]; then kind="a Git LFS pointer (keep media out of LFS too)"
+            elif [ -n "$e" ] && [[ $images == *" $e "* ]]; then kind="an image (.$e)"
+            elif [ -n "$e" ] && [[ $video == *" $e "* ]]; then kind="a video (.$e)"
+            elif [ -n "$e" ] && [[ $audio == *" $e "* ]]; then kind="an audio file (.$e)"
+            elif [ "$e" = svg ] && [ "$n" -gt "$svg_max" ]; then kind="an SVG over 20 KB ($n bytes)"
+            elif f=$(sniff "$h") && [ -n "$f" ]; then kind="$f content under another extension"
+            fi
+            [ -n "$kind" ] || continue
+            # Small favicons and app icons pass without config (never an LFS pointer or a disguised file).
+            if [[ $kind == "an image"* || ( $e == svg && $kind == "an SVG"* ) ]] && [ "$n" -le "$icon_max" ] && icon_name "$lower"; then
+              echo "no-media: $path: favicon or app icon, $n bytes"; icons=$((icons + 1)); continue
+            fi
+            printf '%s\t%s\n' "$path" "$kind" >> "$tmp/media"
+          done < "$tmp/files"
+
+          # Each media file needs an allow row in .media-allow (or projects/<p>/.media-allow).
+          awk -F '\t' 'FILENAME == ARGV[1] { split($0, w, " "); if (w[1] == "A") { re[w[2]] = w[4] ": allow " w[3] }; next }
+            { why = ""; for (r in re) if ($1 ~ r) { why = re[r]; break }
+              if (why != "") print "no-media: " $1 ": allowed by " why
+              else { print "[FAIL] " $1 ": " $2; bad++ } }
+            END { exit bad > 0 }' "$tmp/rules" "$tmp/media" || media=1
+          echo "no-media: $count changed file(s) checked, $icons favicon or app icon(s)"
+          if [ "$media" -eq 1 ]; then status=1
+            echo "no-media: images, video and audio do not belong in git. Put user-facing assets in R2 (served" \
+              "from the CDN) and test fixtures in the local test corpus, and load them from there. Favicons" \
+              "and app icons up to 64 KB pass as they are. For a file that truly must live in the repository," \
+              "add 'allow <path or glob> <reason>' to .media-allow at the repository root (or" \
+              "projects/<p>/.media-allow) and ask a reviewer to put the media-exception label on the pull" \
+              "request, then close and reopen it so this check re-runs."
+          fi
+
+          # CI: each .media-allow may only shrink against BASE; rows the default branch tip has passed there.
+          if [ "$ci" -eq 1 ]; then
+            dflt=$(default_branch)
+            for r in "$base" "$dflt"; do [ -z "$r" ] || rules_at "$r"; done | grep '^A ' > "$tmp/old-rules" || true
+            awk 'FILENAME == ARGV[1] { old[$2 " " $4] = 1; next } $1 == "A" && !(($2 " " $4) in old) { print $4 " new allow row " $3 }' \
+              "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
+            if [ -s "$tmp/added" ]; then
+              if [ "${MEDIA_EXCEPTION:-}" = true ]; then
+                sed 's/^[^ ]* /no-media: allowed by the media-exception label: /' "$tmp/added"
+              else
+                sed 's/^\([^ ]*\) /[FAIL] \1: /' "$tmp/added"
+                echo "no-media: .media-allow may only shrink. A reviewer allows a new row by putting the" \
+                  "media-exception label on the pull request, then closing and reopening it."
+                status=1
+              fi
+            fi
+          fi
+
+          [ "$status" -eq 0 ] && echo "no-media: ok" || echo "no-media: see .media-allow and scripts/check-media.sh"
+          exit "$status"
+          ENGINE
+          chmod +x "$engine"
+          status=0
+          out=$("$engine" --ci "$PR_BASE" "$PR_MERGE" 2>&1) || status=$?
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | sed -n -e 's/%/%25/g' \
+            -e "s/^\[FAIL\] \([^:]*\): \(.*\)$/::error file=\1,title=no-media::\2/p" \
+            -e "s/^\[FAIL\] \([^:]*\)$/::error title=no-media::\1/p"
+          {
+            echo "## No media"
+            if [ "$status" -eq 0 ]; then echo "No new images, video or audio."; else
+              echo "Violations (exit $status). Images, video and audio belong in R2 (user-facing assets) or"
+              echo "the local test corpus (fixtures), not in git. For a file that truly must live here, add"
+              echo "'allow <path or glob> <reason>' to .media-allow, ask a reviewer for the media-exception"
+              echo "label, then close and reopen the pull request to re-run this check"
+              echo "(see the malcomsonbrothers/org-checks README)."
+            fi
+            echo '```'
+            printf '%s\n' "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

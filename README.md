@@ -267,6 +267,58 @@ of this repository or a copy of `scripts/check-commit-size.sh`:
 scripts/check-commit-size.sh origin/main HEAD
 ```
 
+## No media
+
+Candidate required workflow: `.github/workflows/no-media.yml`
+(GitHub-hosted, no credentials). Images, video and audio do not belong in
+git: user-facing assets go to R2 and are loaded from the CDN, test fixtures
+go to the local test corpus. Favicons and app icons are the exception.
+
+It compares the pull request's merge commit with its base, so files already
+in the repository never fail it. Every added, modified, copied or renamed
+file (renames detected, so a move counts at its new path) fails when it is:
+
+- media by extension: images `png jpg jpeg webp gif avif heic heif bmp tif
+  tiff ico psd`, video `mp4 mov webm mkv avi m4v`, audio `wav mp3 m4a aac
+  ogg oga flac opus`
+- an SVG over 20 KB
+- media by content, whatever its extension (PNG, JPEG, GIF, WebP, WAV, AVI,
+  ISO media such as MP4, MOV, M4A, HEIC and AVIF, Matroska and WebM, Ogg,
+  FLAC, MP3 with ID3, PSD, TIFF)
+- a Git LFS pointer of any kind: LFS is not a way round the rule
+
+Favicons and app icons up to 64 KB pass without config: images named
+`favicon.*`, `apple-touch-icon*`, `apple-icon*`, `icon.*`, `icon-*`,
+`android-chrome-*` or `mstile-*`, any `.ico`, and images in an
+`.appiconset` folder. Deleting media, or changing only its mode, counts
+nothing.
+
+### `.media-allow`
+
+Anything else needs a row in `.media-allow` at the repository root, read at
+the merge commit, one per line (`#` starts a comment):
+
+- `allow <glob> <reason>` with the same glob syntax as `.file-lengths` and a
+  short reason, for example
+  `allow assets/end-card/logo.png end-card logo burnt into every film`
+
+`.media-allow` may only shrink against the pull request base; rows the
+default branch tip already has passed there and count as old too. A new row
+fails unless a reviewer adds the `media-exception` label to the pull request
+and then closes and reopens it. The label allows new rows only, never media
+without a row, so every media file in a repository names its reason.
+
+### Fixing a pull request that fails
+
+Move the file to R2 (user-facing) or the test corpus (fixtures) and load it
+from there. If it truly must live in the repository, add an `allow` row and
+ask for the label. To check locally before pushing, from a clone of this
+repository or a copy of `scripts/check-media.sh` (bash, git, awk and od):
+
+```sh
+scripts/check-media.sh origin/main HEAD
+```
+
 ## Pull request titles
 
 Candidate required workflow: `.github/workflows/pr-title.yml`. It is not in
@@ -363,10 +415,11 @@ A repository holding several projects keeps each under `projects/<project>/`
 its own branches: `<project>/swarm/run`, `<project>/swarm/next` and
 `<project>/staging`. The checks key on the folder, not on a monorepo flag:
 any repository with a top-level `projects/<x>/.file-lengths`,
-`.commit-size` or `.crate-tokens` has it read as that folder's config.
+`.commit-size`, `.crate-tokens` or `.media-allow` has it read as that
+folder's config.
 
-- `projects/<project>/.file-lengths`, `.commit-size` and `.crate-tokens`
-  add lines with paths, globs and units relative to that folder (`.` is the
+- `projects/<project>/.file-lengths`, `.commit-size`, `.crate-tokens` and
+  `.media-allow` add lines with paths, globs and units relative to that folder (`.` is the
   folder itself). They cannot reach outside it. `limit` lines stay in the
   root `.file-lengths`. A path with rows in two files is an error.
 - Each file may only shrink against the same file at the base, so moving
@@ -390,7 +443,8 @@ After editing the script, paste it back into the workflow between
 `crate-tokens.yml` embeds `scripts/check-crate-tokens.py` in the same way,
 checked by `scripts/check-crate-tokens.test.sh` (it fetches only uv and the
 pinned tiktoken), and `commit-size.yml` embeds `scripts/check-commit-size.sh`,
-checked by `scripts/check-commit-size.test.sh`. The tests run in `.github/workflows/tests.yml` on every
+checked by `scripts/check-commit-size.test.sh`. `no-media.yml` embeds
+`scripts/check-media.sh` and `scripts/fresh-clone.sh` the same way. The tests run in `.github/workflows/tests.yml` on every
 push and pull request.
 
 ### How the checks fetch the pull request
