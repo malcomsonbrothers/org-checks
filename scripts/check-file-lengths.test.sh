@@ -203,11 +203,12 @@ run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
 expect "required workflow: pull_request trigger, --ci against the base" 0
 run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only for private and internal repositories" 0
 # Every workflow's runner, exactly: commit-count, org-hooks and this repository's own tests
-# hold no checkout credentials and always run GitHub-hosted.
+# hold no checkout credentials and always run GitHub-hosted; no-binaries always runs GitHub-hosted too.
 runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }
 run runners
 [ "$out" = "$(printf '%s\n' "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
-  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "org-hooks.yml:    runs-on: ubuntu-latest" \
+  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:    runs-on: ubuntu-latest" \
+  "org-hooks.yml:    runs-on: ubuntu-latest" \
   "path-collisions.yml:$hybrid" \
   "pr-title.yml:$hybrid" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
 expect "every workflow runs on its intended runner and no other" 0
