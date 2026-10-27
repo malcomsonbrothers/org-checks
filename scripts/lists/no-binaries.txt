@@ -1,0 +1,277 @@
+# Org lists for scripts/check-binaries.sh. Data only: extend a list by adding a line. No repository
+# can change them; a repository allows a path with an allow row in .binary-allow instead.
+#
+# Lines (# starts a comment; patterns are matched against the lower-cased file name, or for dir
+# against each folder name in the path; * is any run of characters, ? one, [..] a class):
+#   about <category> <description>   how a failure in the category is described
+#   deny <category> <pattern>        a file name that fails even when it is text or a Git LFS pointer
+#   keep <pattern>                   a file name never denied by name (content and size still count)
+#   dir <category> <pattern>         a folder name nothing may be committed under
+#   magic <category> <hex pattern> <name...>   first bytes (lower-case hex) of a media file
+#   icon <pattern>                   a favicon or app icon name (passes when small and an image)
+#   icondir <pattern>                a folder whose images are app icons
+#   iconext <extension>              an image extension a favicon or app icon may have
+#   tokenfile <pattern>              a config file that fails when it holds a literal token
+
+about media image, video or audio (belongs in R2 or the local test corpus)
+about image image content (belongs in R2 or the local test corpus)
+about 3d 3D, Blender or texture file (keep it in R2 or a project store)
+about model model weights or array data (keep them in R2 or a model store)
+about archive archive or package (publish it to a registry or R2 instead)
+about compiled compiled or object code (build it in CI instead)
+about database database file (seed it from SQL or a script instead)
+about office office document or PDF (keep it in a document store)
+about secret secret, key or state file (keep it in SSM or a secret store, and rotate it if real)
+about junk editor, OS or tool junk (delete it and add it to .gitignore)
+about dir build output or dependency folder (add it to .gitignore)
+about font font (list it in .binary-allow if the repository must ship it)
+about lfs Git LFS pointer (keep binaries out of LFS too)
+about binary binary content, a NUL byte in the first 8 KB
+about size file over 1 MB (list it as allow, or as exempt when generated, in .binary-allow)
+
+# Media
+deny media *.png
+deny media *.jpg
+deny media *.jpeg
+deny media *.webp
+deny media *.gif
+deny media *.avif
+deny media *.heic
+deny media *.heif
+deny media *.bmp
+deny media *.tif
+deny media *.tiff
+deny media *.ico
+deny media *.jxl
+deny media *.mp4
+deny media *.mov
+deny media *.webm
+deny media *.mkv
+deny media *.avi
+deny media *.m4v
+deny media *.mpg
+deny media *.mpeg
+deny media *.wmv
+deny media *.flv
+deny media *.3gp
+deny media *.wav
+deny media *.mp3
+deny media *.m4a
+deny media *.aac
+deny media *.ogg
+deny media *.oga
+deny media *.flac
+deny media *.opus
+deny media *.aif
+deny media *.aiff
+deny media *.wma
+
+# Blender and 3D (with Blender's numbered backups and autosaves)
+deny 3d *.blend
+deny 3d *.blend[1-9]
+deny 3d *.blend[1-3][0-9]
+deny 3d *.blend@
+deny 3d *.fbx
+deny 3d *.obj
+deny 3d *.mtl
+deny 3d *.glb
+deny 3d *.gltf
+deny 3d *.usd
+deny 3d *.usda
+deny 3d *.usdc
+deny 3d *.usdz
+deny 3d *.abc
+deny 3d *.ply
+deny 3d *.stl
+deny 3d *.3ds
+deny 3d *.dae
+deny 3d *.max
+deny 3d *.ma
+deny 3d *.mb
+deny 3d *.c4d
+deny 3d *.x3d
+# Blender caches and textures
+deny 3d *.vdb
+deny 3d *.bphys
+deny 3d *.exr
+deny 3d *.hdr
+deny 3d *.tga
+deny 3d *.dds
+deny 3d *.ktx
+deny 3d *.ktx2
+deny 3d *.psd
+deny 3d *.kra
+deny 3d *.xcf
+deny 3d *.sbsar
+deny 3d *.spp
+dir 3d autosave
+dir 3d blendcache_*
+
+# Model weights and arrays
+deny model *.onnx
+deny model *.pt
+deny model *.pth
+deny model *.ckpt
+deny model *.safetensors
+deny model *.gguf
+deny model *.ggml
+deny model *.h5
+deny model *.tflite
+deny model *.pb
+deny model *.mlmodel
+deny model *.bin
+deny model *.npy
+deny model *.npz
+deny model *.pkl
+deny model *.joblib
+
+# Archives and packages
+deny archive *.zip
+deny archive *.tar
+deny archive *.gz
+deny archive *.tgz
+deny archive *.bz2
+deny archive *.xz
+deny archive *.zst
+deny archive *.7z
+deny archive *.rar
+deny archive *.jar
+deny archive *.war
+deny archive *.whl
+deny archive *.egg
+deny archive *.deb
+deny archive *.rpm
+deny archive *.dmg
+deny archive *.iso
+deny archive *.apk
+deny archive *.ipa
+
+# Compiled
+deny compiled *.so
+deny compiled *.dylib
+deny compiled *.dll
+deny compiled *.exe
+deny compiled *.o
+deny compiled *.a
+deny compiled *.lib
+deny compiled *.class
+deny compiled *.pyc
+deny compiled *.pyo
+deny compiled *.wasm
+
+# Databases
+deny database *.sqlite
+deny database *.sqlite3
+deny database *.db
+deny database *.mdb
+
+# Office and PDF
+deny office *.pdf
+deny office *.doc
+deny office *.docx
+deny office *.xls
+deny office *.xlsx
+deny office *.ppt
+deny office *.pptx
+deny office *.numbers
+deny office *.pages
+
+# Secrets (.key is also Keynote)
+deny secret *.pem
+deny secret *.key
+deny secret *.p12
+deny secret *.pfx
+deny secret *.jks
+deny secret *.keystore
+deny secret id_rsa
+deny secret id_dsa
+deny secret id_ecdsa
+deny secret id_ed25519
+deny secret .env
+deny secret .env.*
+keep .env.example
+keep .env.sample
+keep .env.template
+deny secret *.tfstate
+deny secret *.tfstate.backup
+tokenfile .npmrc
+tokenfile .pypirc
+
+# Junk
+deny junk .ds_store
+deny junk ._*
+deny junk thumbs.db
+deny junk desktop.ini
+deny junk *.orig
+deny junk *.rej
+deny junk *.bak
+deny junk *.swp
+deny junk *.swo
+deny junk *~
+deny junk *.log
+deny junk *.tmp
+
+# Fonts: binary, so they fail unless allowed by a row
+deny font *.woff
+deny font *.woff2
+deny font *.ttf
+deny font *.otf
+deny font *.eot
+
+# Build output and dependency folders
+dir dir node_modules
+dir dir __pycache__
+dir dir .venv
+dir dir target
+dir dir dist
+dir dir build
+dir dir .svelte-kit
+dir dir .terraform
+
+# Content: first bytes of media files, whatever the extension
+magic image 89504e47* PNG
+magic image ffd8ff* JPEG
+magic image 47494638* GIF
+magic image 52494646????????57454250* WebP
+magic image 00000100* ICO
+magic image 424d????????00000000* BMP
+magic image 49492a00* TIFF
+magic image 4d4d002a* TIFF
+magic image ff0a* JPEG XL
+magic image 0000000c4a584c20* JPEG XL
+magic 3d 38425053* PSD
+magic 3d 424c454e444552* Blender
+magic media 52494646????????57415645* WAV
+magic media 52494646????????41564920* AVI
+magic media ????????66747970* ISO media (MP4, MOV, M4A, 3GP, HEIC or AVIF)
+magic media 1a45dfa3* Matroska (MKV or WebM)
+magic media 4f676753* Ogg
+magic media 664c6143* FLAC
+magic media 464f524d????????4149464[63]* AIFF
+magic media 3026b2758e66cf11* ASF (WMV or WMA)
+magic media 464c5601* FLV
+magic media 000001ba* MPEG video
+magic media 000001b3* MPEG video
+magic media 494433* MP3 (ID3)
+# MPEG or AAC frame sync (ffe0 to ffff), but not fffe, the UTF-16 byte order mark
+magic media ffe* MPEG or AAC audio
+magic media fff[0-9a-df]* MPEG or AAC audio
+
+# Favicons and app icons: up to 64 KB, image content (or plain SVG), never an LFS pointer
+icon favicon.*
+icon apple-touch-icon*
+icon apple-icon*
+icon icon.*
+icon icon-*
+icon android-chrome-*
+icon mstile-*
+icon *.ico
+icondir *.appiconset
+iconext png
+iconext ico
+iconext svg
+iconext jpg
+iconext jpeg
+iconext gif
+iconext webp
+iconext avif
