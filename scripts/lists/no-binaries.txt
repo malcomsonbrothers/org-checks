@@ -7,7 +7,10 @@
 #   deny <category> <pattern>        a file name that fails even when it is text or a Git LFS pointer
 #   keep <pattern>                   a file name never denied by name (content and size still count)
 #   dir <category> <pattern>         a folder name nothing may be committed under
+#   rootdir <category> <pattern>     the same, but only at the repository root or a projects/<p>/ root
 #   magic <category> <hex pattern> <name...>   first bytes (lower-case hex) of a media file
+#   magicnul <category> <hex pattern> <name...>   the same, only for a file with a NUL byte (for
+#                                    magics that are plain ASCII, so text may start with them)
 #   icon <pattern>                   a favicon or app icon name (passes when small and an image)
 #   icondir <pattern>                a folder whose images are app icons
 #   iconext <extension>              an image extension a favicon or app icon may have
@@ -222,37 +225,38 @@ deny font *.eot
 dir dir node_modules
 dir dir __pycache__
 dir dir .venv
-dir dir target
-dir dir dist
-dir dir build
+# Common source folder names deeper down (crates/build, src/dist), so only at a root
+rootdir dir target
+rootdir dir dist
+rootdir dir build
 dir dir .svelte-kit
 dir dir .terraform
 
 # Content: first bytes of media files, whatever the extension
 magic image 89504e47* PNG
 magic image ffd8ff* JPEG
-magic image 47494638* GIF
-magic image 52494646????????57454250* WebP
+magicnul image 47494638* GIF
+magicnul image 52494646????????57454250* WebP
 magic image 00000100* ICO
 magic image 424d????????00000000* BMP
 magic image 49492a00* TIFF
 magic image 4d4d002a* TIFF
 magic image ff0a* JPEG XL
 magic image 0000000c4a584c20* JPEG XL
-magic 3d 38425053* PSD
-magic 3d 424c454e444552* Blender
-magic media 52494646????????57415645* WAV
-magic media 52494646????????41564920* AVI
+magicnul 3d 38425053* PSD
+magicnul 3d 424c454e444552* Blender
+magicnul media 52494646????????57415645* WAV
+magicnul media 52494646????????41564920* AVI
 magic media ????????66747970* ISO media (MP4, MOV, M4A, 3GP, HEIC or AVIF)
 magic media 1a45dfa3* Matroska (MKV or WebM)
-magic media 4f676753* Ogg
-magic media 664c6143* FLAC
-magic media 464f524d????????4149464[63]* AIFF
+magicnul media 4f676753* Ogg
+magicnul media 664c6143* FLAC
+magicnul media 464f524d????????4149464[63]* AIFF
 magic media 3026b2758e66cf11* ASF (WMV or WMA)
 magic media 464c5601* FLV
 magic media 000001ba* MPEG video
 magic media 000001b3* MPEG video
-magic media 494433* MP3 (ID3)
+magicnul media 494433* MP3 (ID3)
 # MPEG or AAC frame sync (ffe0 to ffff), but not fffe, the UTF-16 byte order mark
 magic media ffe* MPEG or AAC audio
 magic media fff[0-9a-df]* MPEG or AAC audio

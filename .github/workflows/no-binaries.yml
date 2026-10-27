@@ -145,7 +145,10 @@ jobs:
           #   deny <category> <pattern>        a file name that fails even when it is text or a Git LFS pointer
           #   keep <pattern>                   a file name never denied by name (content and size still count)
           #   dir <category> <pattern>         a folder name nothing may be committed under
+          #   rootdir <category> <pattern>     the same, but only at the repository root or a projects/<p>/ root
           #   magic <category> <hex pattern> <name...>   first bytes (lower-case hex) of a media file
+          #   magicnul <category> <hex pattern> <name...>   the same, only for a file with a NUL byte (for
+          #                                    magics that are plain ASCII, so text may start with them)
           #   icon <pattern>                   a favicon or app icon name (passes when small and an image)
           #   icondir <pattern>                a folder whose images are app icons
           #   iconext <extension>              an image extension a favicon or app icon may have
@@ -360,37 +363,38 @@ jobs:
           dir dir node_modules
           dir dir __pycache__
           dir dir .venv
-          dir dir target
-          dir dir dist
-          dir dir build
+          # Common source folder names deeper down (crates/build, src/dist), so only at a root
+          rootdir dir target
+          rootdir dir dist
+          rootdir dir build
           dir dir .svelte-kit
           dir dir .terraform
 
           # Content: first bytes of media files, whatever the extension
           magic image 89504e47* PNG
           magic image ffd8ff* JPEG
-          magic image 47494638* GIF
-          magic image 52494646????????57454250* WebP
+          magicnul image 47494638* GIF
+          magicnul image 52494646????????57454250* WebP
           magic image 00000100* ICO
           magic image 424d????????00000000* BMP
           magic image 49492a00* TIFF
           magic image 4d4d002a* TIFF
           magic image ff0a* JPEG XL
           magic image 0000000c4a584c20* JPEG XL
-          magic 3d 38425053* PSD
-          magic 3d 424c454e444552* Blender
-          magic media 52494646????????57415645* WAV
-          magic media 52494646????????41564920* AVI
+          magicnul 3d 38425053* PSD
+          magicnul 3d 424c454e444552* Blender
+          magicnul media 52494646????????57415645* WAV
+          magicnul media 52494646????????41564920* AVI
           magic media ????????66747970* ISO media (MP4, MOV, M4A, 3GP, HEIC or AVIF)
           magic media 1a45dfa3* Matroska (MKV or WebM)
-          magic media 4f676753* Ogg
-          magic media 664c6143* FLAC
-          magic media 464f524d????????4149464[63]* AIFF
+          magicnul media 4f676753* Ogg
+          magicnul media 664c6143* FLAC
+          magicnul media 464f524d????????4149464[63]* AIFF
           magic media 3026b2758e66cf11* ASF (WMV or WMA)
           magic media 464c5601* FLV
           magic media 000001ba* MPEG video
           magic media 000001b3* MPEG video
-          magic media 494433* MP3 (ID3)
+          magicnul media 494433* MP3 (ID3)
           # MPEG or AAC frame sync (ffe0 to ffff), but not fffe, the UTF-16 byte order mark
           magic media ffe* MPEG or AAC audio
           magic media fff[0-9a-df]* MPEG or AAC audio
@@ -569,7 +573,7 @@ jobs:
             h=${hx// /}; h=${h:0:128}
             tok=0
             if [[ $tokenfiles == *" ${path##*/} "* ]] && { git cat-file blob "$sha" || :; } |
-              grep -Eiq '(_authtoken|_auth|_password|password|token)[[:space:]]*[=:][[:space:]]*[^$[:space:]]'; then tok=1; fi
+              grep -Eiq "(_authtoken|_auth|_password|password|token)[[:space:]]*[=:][[:space:]]*[\"']?[^\$\"'[:space:]]"; then tok=1; fi
             printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sha" "$n" "$nul" "$h" "$tok" "$path" >> "$tmp/files"
           done < "$tmp/sized"
           shopt -u nocasematch
@@ -590,9 +594,9 @@ jobs:
                 if (w[1] == "about") { d = l; sub(/^about [^ ]+ /, "", d); about[w[2]] = d }
                 else if (w[1] == "deny") { nd++; dre[nd] = re(w[3]); dcat[nd] = w[2] }
                 else if (w[1] == "keep") keep[re(w[2])] = 1
-                else if (w[1] == "dir") { nf++; fre[nf] = re(w[3]); fcat[nf] = w[2] }
-                else if (w[1] == "magic") { nm++; m = w[3]; sub(/\*$/, "", m); mre[nm] = re(m); sub(/\$$/, "", mre[nm]); mcat[nm] = w[2]
-                  d = l; sub(/^magic [^ ]+ [^ ]+ /, "", d); mname[nm] = d }
+                else if (w[1] == "dir" || w[1] == "rootdir") { nf++; fre[nf] = re(w[3]); fcat[nf] = w[2]; froot[nf] = w[1] == "rootdir" }
+                else if (w[1] == "magic" || w[1] == "magicnul") { nm++; m = w[3]; sub(/\*$/, "", m); mre[nm] = re(m); sub(/\$$/, "", mre[nm])
+                  mcat[nm] = w[2]; mnul[nm] = w[1] == "magicnul"; d = l; sub(/^magic(nul)? [^ ]+ [^ ]+ /, "", d); mname[nm] = d }
                 else if (w[1] == "icon") icon[re(w[2])] = 1
                 else if (w[1] == "icondir") icondir[re(w[2])] = 1
                 else if (w[1] == "iconext") iconext[w[2]] = 1 }
@@ -605,10 +609,10 @@ jobs:
             { sha = $1; n = $2 + 0; nul = $3; h = $4; tok = $5; p = $6; lp = tolower(p)
               k = split(lp, seg, "/"); name = seg[k]; on = p; sub(/.*\//, "", on); ext = name ~ /^[^.].*\.[^.]+$/ ? name : ""; sub(/.*\./, "", ext)
               isl = index(h, lfs) == 1; mc = ""
-              for (i = 1; i <= nm && !isl; i++) if (h ~ mre[i]) { mc = mcat[i]; mn = mname[i]; break }
+              for (i = 1; i <= nm && !isl; i++) if (h ~ mre[i] && (nul || !mnul[i])) { mc = mcat[i]; mn = mname[i]; break }
               why = row(p, allow); if (why != "") { pass(p, "allowed by " why); next }
               cat = ""; detail = ""
-              for (j = 1; j < k && cat == ""; j++) for (i = 1; i <= nf; i++) if (seg[j] ~ fre[i]) { cat = fcat[i]; detail = "under " seg[j] "/"; break }
+              for (j = 1; j < k && cat == ""; j++) for (i = 1; i <= nf; i++) if (seg[j] ~ fre[i] && (!froot[i] || j == 1 || (j == 3 && seg[1] == "projects"))) { cat = fcat[i]; detail = "under " seg[j] "/"; break }
               isicon = 0; for (r in icon) if (name ~ r) isicon = 1; for (j = 1; j < k; j++) for (r in icondir) if (seg[j] ~ r) isicon = 1
               if (cat == "" && isicon && (ext in iconext) && !isl && n <= imax && (mc == "" || mc == "image") && !(ext == "svg" && nul)) {
                 if (!(p in passed)) icons++; pass(p, "favicon or app icon, " n " bytes"); next }
