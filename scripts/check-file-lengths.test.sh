@@ -206,7 +206,8 @@ run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only f
 # hold no checkout credentials and always run GitHub-hosted; no-binaries always runs GitHub-hosted too.
 runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }
 run runners
-[ "$out" = "$(printf '%s\n' "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
+[ "$out" = "$(printf '%s\n' "agent-guidance.yml:    runs-on: ubuntu-latest" \
+  "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
   "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:    runs-on: ubuntu-latest" \
   "org-hooks.yml:    runs-on: ubuntu-latest" \
   "path-collisions.yml:$hybrid" \
