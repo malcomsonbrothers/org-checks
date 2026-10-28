@@ -47,6 +47,12 @@ jobs:
       - name: Check the org hooks pin
         run: scripts/check-org-hooks-pin.sh
 
+      - name: Check agent guidance workflow helper copies
+        run: |
+          workflow=.github/workflows/agent-guidance.yml
+          awk '/<<.CLONE.$/ { on = 1; next } /^ *CLONE$/ { on = 0 } on { sub(/^          /, ""); print }' "$workflow" | cmp - scripts/fresh-clone.sh
+          awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$workflow" | cmp - scripts/check-agent-guidance.py
+
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Test the crate token check
