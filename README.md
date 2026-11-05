@@ -419,10 +419,10 @@ git config core.hooksPath .githooks   # once per clone
 ```
 
 The guard is local only, so the swarm never waits for CI. A push to
-`swarm/run` counts the commits made since the newest release on
-`origin/staging` (else the default branch) was committed: the newest
+`swarm/run` counts the non-merge commits `origin/staging` (else the default
+branch) lacks, made since its newest release was committed: the newest
 non-merge commit on its first-parent chain, so a sync merge of the default
-branch into staging is not a release. This assumes releases land as rebase
+branch into staging is not a release, and what it brought in is not counted. This assumes releases land as rebase
 merges: a release landed as a merge commit, or a slice touching nothing under
 `projects/<project>/`, makes it overcount. From 80 it warns, from 150 it
 refuses the push. Cut a staging release to clear it, and `git fetch` if

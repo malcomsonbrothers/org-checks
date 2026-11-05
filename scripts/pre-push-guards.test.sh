@@ -39,8 +39,8 @@ expect() { # expect NAME RC [PATTERN that must appear in the output]
 }
 quiet() { [ -z "$out" ] || { rc=output; }; }
 
-# A single-project repository: swarm/run counts commits since origin/staging (its head included).
-repo single; mark swarm/run; mark staging; commits 78
+# A single-project repository: swarm/run counts commits origin/staging lacks, made since its head.
+repo single; mark swarm/run; mark staging; commits 79
 push swarm/run; quiet; expect "79 unreleased commits pass silently" 0
 commits 1; push swarm/run
 expect "80 warn" 0 '^release-guard: 80 unreleased commits on swarm/run: cut a staging release now; GitHub refuses rebase-merge past ~100$'
@@ -56,14 +56,14 @@ git update-ref -d refs/remotes/origin/swarm/run; push swarm/run; quiet; expect "
 
 # .release-guard may lower the limits, never raise them.
 repo lower; cfg .release-guard 'warn 2' 'refuse 300' '# note'; mark swarm/run; mark staging
-push swarm/run; quiet; expect "1 commit under warn 2" 0
-commits 1; push swarm/run; expect "warn lowered" 0 '2 unreleased commits on swarm/run'
+push swarm/run; quiet; expect "no commits under warn 2" 0
+commits 2; push swarm/run; expect "warn lowered" 0 '2 unreleased commits on swarm/run'
 cfg .release-guard 'warn 2' 'refuse 3' 'bogus 1' 'warn x'; push swarm/run
 expect "refuse lowered, bad lines ignored" 1 'push refused at 3 or more'
 grep -q 'ignoring .release-guard line: bogus 1' <<<"$out" || expect "bad lines are named" x
 
 # A project's <p>/swarm/run counts since origin/<p>/staging; projects/<p>/.release-guard lowers it.
-repo mono; proj movopop; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; commits 79; mark staging
+repo mono; proj movopop; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; commits 80; mark staging
 push movopop/swarm/run; expect "<p>/swarm/run counts since <p>/staging" 0 '80 unreleased commits on movopop/swarm/run'
 expect "and names it" 0 'counted since origin/movopop/staging at '
 push swarm/run; quiet; expect "swarm/run still counts since staging" 0
@@ -71,7 +71,7 @@ commits 70; push movopop/swarm/run; expect "<p>/swarm/run refuses at 150" 1 'rel
 git update-ref -d refs/remotes/origin/movopop/staging; mark staging; push movopop/swarm/run
 expect "no <p>/staging: counts since the default branch, not staging" 1 'counted since origin/master at '
 repo pcfg; proj movopop; proj other; mark movopop/swarm/run; mark movopop/staging; mark swarm/run; mark staging
-mark other/swarm/run; mark other/staging; cfg projects/movopop/.release-guard 'warn 2' 'refuse 2'
+mark other/swarm/run; mark other/staging; cfg projects/movopop/.release-guard 'warn 2' 'refuse 2'; commits 1
 push movopop/swarm/run; expect "projects/<p>/.release-guard lowers its project" 1 'push refused at 2 or more; release movopop/swarm/run'
 push swarm/run other/swarm/run; quiet; expect "and no other branch" 0
 cfg .release-guard 'warn 3' 'refuse 3'; push other/swarm/run; expect "the root .release-guard lowers every project" 1 'refused at 3 or more; release other/swarm/run'
@@ -85,7 +85,7 @@ git checkout -q -b side; commits 1; git checkout -q -b st origin/staging; commit
 commits 81; git checkout -q st; day=$((day + 1))
 GIT_COMMITTER_DATE="@$((1767225600 + day * 86400)) +0000" git merge -q --no-ff -m sync side
 mark movopop/staging; mark staging; git checkout -q master; commits 1; push movopop/swarm/run
-expect "a sync merge on <p>/staging is not a release" 0 '83 unreleased commits on movopop/swarm/run'
+expect "a sync merge on <p>/staging is not a release" 0 '82 unreleased commits on movopop/swarm/run'
 expect "nor are commits outside projects/<p>/" 0 'counted since origin/movopop/staging at 2026-01-03T'
 push swarm/run; expect "staging counts from its newest non-merge commit" 0 'counted since origin/staging at 2026-01-05T'
 
