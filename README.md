@@ -433,8 +433,8 @@ way when the pushed commit has a `projects/<project>/` folder (its newest
 release being the newest such commit touching `projects/<project>/`), and
 `projects/<project>/.release-guard` may lower its thresholds too. In a
 repository without `projects/` the check also accepts the previous guard
-(`GUARD_BLOB_PREVIOUS`, until the next pin bump after 2026-10-21), which
-guards it the same way but counts from a sync merge; otherwise every repository must reinstall when the
+(`GUARD_BLOB_PREVIOUS`, until the next pin bump after 2026-11-05), which
+guards it the same way but also counts commits a sync of the default branch brought in; otherwise every repository must reinstall when the
 guard changes here and the ruleset pin moves. After changing `scripts/hooks/pre-push-guards.sh`, update
 `GUARD_BLOB` in `org-hooks.yml` and run `scripts/install-hooks.sh` here;
 `scripts/check-org-hooks-pin.sh` fails until both match.

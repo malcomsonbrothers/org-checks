@@ -5,7 +5,11 @@
 # A push to swarm/run counts its unreleased commits: those committed since the head of
 # <remote>/staging (else the remote's default branch). A push to <project>/swarm/run, where the
 # pushed commit has a projects/<project>/ folder, counts against <remote>/<project>/staging.
-# Rebase merges rewrite SHAs, so the committer date, not ancestry, marks what was released.
+# Rebase merges rewrite SHAs, so the committer date, not ancestry, marks what was released: the
+# date of the newest non-merge commit on the release ref's first-parent chain (for a project, the
+# newest such commit touching projects/<project>/). Releases land as linear commits, so merges on
+# that chain (a sync of the default branch into staging) and what they bring in are not releases.
+# With no such commit, the release ref's head counts.
 # Warns at 80, refuses at 150.
 # A repo's .release-guard (read at the pushed commit) may lower either: "warn N", "refuse N";
 # for <project>/swarm/run, so may projects/<project>/.release-guard.
@@ -33,7 +37,8 @@ while read -r _local_ref local_sha remote_ref _remote_sha; do
     if [ -n "$c" ] && git rev-parse -q --verify "$c^{commit}" >/dev/null; then release=$c; break; fi
   done
   [ -n "$release" ] || continue
-  since=$(git log -1 --format=%cI "$release")
+  since=$(git log -1 --first-parent --no-merges --format=%cI "$release" -- ${p:+"projects/$p"})
+  [ -n "$since" ] || since=$(git log -1 --format=%cI "$release")
   w=$warn r=$refuse
   while read -r key value rest; do
     case $key in ''|'#'*) continue ;; esac
