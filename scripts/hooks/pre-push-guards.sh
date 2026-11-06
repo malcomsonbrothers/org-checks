@@ -6,10 +6,12 @@
 # (<remote>/staging, else the remote's default branch) lacks by ancestry and committed since its
 # last release. A push to <project>/swarm/run, where the pushed commit has a projects/<project>/
 # folder, counts against <remote>/<project>/staging. Ancestry drops what a sync of the default
-# branch already gave staging, however old. Rebase merges rewrite SHAs and slices may combine
-# commits, so neither ancestry nor patch identity marks a released swarm/run commit; the committer
-# date does: that of the newest non-merge commit on the release ref's first-parent chain (for a
-# project, the newest such commit touching projects/<project>/). With none, the head's date counts.
+# branch already gave staging, however old, and the default branch's own commits: a sync of it
+# into swarm/run is not a release, and staging takes them by a merge-commit sync. Rebase merges
+# rewrite SHAs and slices may combine commits, so neither ancestry nor patch identity marks a
+# released swarm/run commit; the committer date does: that of the newest non-merge commit on the
+# release ref's first-parent chain (for a project, the newest such commit touching
+# projects/<project>/). With none, the head's date counts.
 # Warns at 80, refuses at 150.
 # A repo's .release-guard (read at the pushed commit) may lower either: "warn N", "refuse N";
 # for <project>/swarm/run, so may projects/<project>/.release-guard.
@@ -37,6 +39,10 @@ while read -r _local_ref local_sha remote_ref _remote_sha; do
     if [ -n "$c" ] && git rev-parse -q --verify "$c^{commit}" >/dev/null; then release=$c; break; fi
   done
   [ -n "$release" ] || continue
+  base=""
+  for c in "$default" "refs/remotes/$remote/main" "refs/remotes/$remote/master"; do
+    if [ -n "$c" ] && git rev-parse -q --verify "$c^{commit}" >/dev/null; then base=$c; break; fi
+  done
   since=$(git log -1 --first-parent --no-merges --format=%cI "$release" -- ${p:+"projects/$p"})
   [ -n "$since" ] || since=$(git log -1 --format=%cI "$release")
   w=$warn r=$refuse
@@ -48,7 +54,7 @@ while read -r _local_ref local_sha remote_ref _remote_sha; do
     else echo "release-guard: ignoring .release-guard line: $key $value" >&2; fi
   done < <(for f in .release-guard ${p:+"projects/$p/.release-guard"}; do
     git show "$local_sha:$f" 2>/dev/null | tr -d '\r' || :; done)
-  n=$(git rev-list --count --no-merges --since="$since" "$release..$local_sha")
+  n=$(git rev-list --count --no-merges --since="$since" "$release..$local_sha" ${base:+"^$base"})
   [ "$n" -ge "$w" ] || continue
   msg="$n unreleased commits on $run: cut a staging release now; GitHub refuses rebase-merge past ~100"
   echo "release-guard: $msg" >&2
