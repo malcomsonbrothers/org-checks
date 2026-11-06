@@ -330,8 +330,9 @@ syntax as `.file-lengths` and a short reason:
 - `exempt <glob> <reason>`: a generated text file may be over 1 MB, for
   example `exempt openapi/*.json generated OpenAPI documents`
 
-`.binary-allow` may only shrink against the pull request base; rows the
-default branch tip already has passed there and count as old too. A new row
+`.binary-allow` may only shrink against the pull request base, and in a
+sync (see `.file-lengths`) also against the default branch tip, whose rows
+passed there. In any other pull request only the base counts. A new row
 fails unless a reviewer adds the `binary-exception` label to the pull
 request and then closes and reopens it. The label allows new rows only,
 never a file without a row, so every binary in a repository names its
