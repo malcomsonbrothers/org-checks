@@ -35,6 +35,9 @@ jobs:
       - name: Test the pre-push release guard
         run: scripts/pre-push-guards.test.sh
 
+      - name: Test the no-binaries check
+        run: scripts/check-binaries.test.sh
+
       - name: Test the fresh clone the required workflows check in
         run: scripts/fresh-clone.test.sh
 
