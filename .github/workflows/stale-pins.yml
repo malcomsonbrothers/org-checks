@@ -1,0 +1,46 @@
+# Stale pins: a daily check that the org ruleset's required workflows (pinned by commit in
+# scripts/lists/ruleset-pins.txt) still match master. A fix merged here reaches other
+# repositories only when the ruleset pin is bumped; this fails while a pinned file differs from
+# master, or a pin is not on master, naming the commit to bump to. GitHub emails on a failed
+# scheduled run. Reading the live ruleset needs Organization administration: read, which the job
+# token lacks: with the optional RULESET_READ_TOKEN secret it also fails while the manifest
+# differs from ruleset 24585672; without it, it warns that the manifest is unverified.
+# GitHub-hosted: it compiles nothing.
+
+name: Stale Pins
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the live ruleset
+        id: ruleset
+        env:
+          GH_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning title=ruleset-pins::RULESET_READ_TOKEN is not set: scripts/lists/ruleset-pins.txt is not verified against the live ruleset"
+            exit 0
+          fi
+          gh api orgs/malcomsonbrothers/rulesets/24585672 > "$RUNNER_TEMP/ruleset.json"
+          echo "file=$RUNNER_TEMP/ruleset.json" >> "$GITHUB_OUTPUT"
+
+      - name: Check the pins against master
+        env:
+          RULESET: ${{ steps.ruleset.outputs.file }}
+        run: scripts/check-ruleset-pins.sh ${RULESET:+--ruleset "$RULESET"}

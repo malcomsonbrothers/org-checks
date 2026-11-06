@@ -502,3 +502,20 @@ differs from the script.
 A change merged here takes effect organisation-wide only when the ruleset's
 pinned ref is updated to the new commit. Until then every repository keeps
 running the previously pinned version.
+
+### Stale ruleset pins
+
+`scripts/lists/ruleset-pins.txt` lists each required workflow and the commit
+org ruleset 24585672 pins it at (`<workflow path> <sha>`). When you bump a
+pin in the ruleset, bump it there in the same change. `.github/workflows/stale-pins.yml`
+runs `scripts/check-ruleset-pins.sh` daily on master (GitHub-hosted, and on
+demand): it fails while a pinned workflow file differs from master's copy or
+a pin is not an ancestor of master, naming the commit to bump to, and GitHub
+emails the failure. Reading the live ruleset needs "Organization
+administration: read", which the job token lacks, so the list is checked
+against it only when the repository secret `RULESET_READ_TOKEN` (a
+fine-grained token or GitHub App token with that permission on
+malcomsonbrothers) is set; otherwise the run warns that the list is
+unverified. This secret is for this repository's own scheduled job only; no
+required check ever uses it. Locally:
+`scripts/check-ruleset-pins.sh --ruleset <(gh api orgs/malcomsonbrothers/rulesets/24585672)`.
