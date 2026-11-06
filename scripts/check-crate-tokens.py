@@ -18,7 +18,11 @@
 #   check-crate-tokens.py --ci BASE        the working tree, and .crate-tokens may not add
 #                                          or raise baseline rows or add exempt lines
 #                                          compared with BASE unless
-#                                          CRATE_TOKENS_EXCEPTION=true (the PR label)
+#                                          CRATE_TOKENS_EXCEPTION=true (the PR label);
+#                                          in a sync, also the default branch tip
+# A sync: CRATE_TOKENS_HEAD_REF is the default branch, CRATE_TOKENS_HEAD_REPO is
+# CRATE_TOKENS_REPO, and in a full clone HEAD has the tip of origin/<default branch> but
+# BASE does not. Its lines passed on the default branch, so they count as old too.
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
 # Run with: uv run --script scripts/check-crate-tokens.py [mode], or through
@@ -285,18 +289,46 @@ def resolve_base(base):
     return mb.decode().strip() if mb else None
 
 
+def sync_tip(base):
+    """The tip of origin/<default branch> in a sync (see the top), else None."""
+    d, env = os.environ.get("CRATE_TOKENS_DEFAULT_BRANCH", ""), os.environ.get
+    if not d or env("CRATE_TOKENS_HEAD_REF", "") != d or not env("CRATE_TOKENS_REPO", "") \
+            or env("CRATE_TOKENS_HEAD_REPO", "") != env("CRATE_TOKENS_REPO"):
+        return None
+    tip = git("rev-parse", "-q", "--verify", f"origin/{d}^{{commit}}", check=False)
+    shallow = git("rev-parse", "--is-shallow-repository", check=False)
+    if not tip or (shallow or b"").strip() != b"false":
+        return None
+    tip = tip.decode().strip()
+    if git("merge-base", "--is-ancestor", tip, "HEAD", check=False) is None:
+        return None
+    if base and git("merge-base", "--is-ancestor", tip, base, check=False) is not None:
+        return None
+    return tip
+
+
+def old_config(ref, name, pre):
+    """(exempt, rows) of config NAME at commit REF; nothing for no REF or a broken file."""
+    text = git("show", f"{ref}:{name}", check=False) if ref else None
+    try:
+        return parse_config((text or b"").decode(), f"{ref}:{name}", pre)
+    except ConfigError:
+        return [], {}  # a broken old config grandfathers nothing
+
+
 def compare_base(base, per):
     """(config name, line) for each line a config file added or raised compared with the same
-    file at BASE."""
+    file at BASE (in a sync, also at the default branch tip)."""
     base = resolve_base(base)
+    tip = sync_tip(base)
     added = []
     for name, (exempt, rows) in per.items():
         pre = prefix_of(name)
-        old_text = git("show", f"{base}:{name}", check=False) if base else None
-        try:
-            old_exempt, old_rows = parse_config((old_text or b"").decode(), f"{base}:{name}", pre)
-        except ConfigError:
-            old_exempt, old_rows = [], {}  # a broken base config grandfathers nothing
+        old_exempt, old_rows = old_config(base, name, pre)
+        tip_exempt, tip_rows = old_config(tip, name, pre)
+        old_exempt = old_exempt + tip_exempt
+        for u, n in tip_rows.items():
+            old_rows[u] = max(n, old_rows.get(u, 0))
         added += [(name, f"new exempt line {g[len(pre):]}") for g in exempt if g not in old_exempt]
         for u, n in sorted(rows.items()):
             if u not in old_rows:

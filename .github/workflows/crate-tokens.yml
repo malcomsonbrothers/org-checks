@@ -15,6 +15,9 @@
 # .crate-tokens may only shrink against the pull request base: new or raised
 # baseline rows and new exempt lines fail unless the pull request has the
 # crate-tokens-exception label (then close and reopen the pull request to re-run).
+# In a sync (this repository's own default branch into a base that lacks its
+# tip, as for file-lengths.yml), lines the default branch tip already has also
+# count as old: they passed there.
 #
 # The engine below is scripts/check-crate-tokens.py, embedded so the job
 # fetches no code from this repository: the ruleset's pinned commit pins the
@@ -47,6 +50,10 @@ jobs:
           FRESH_CLONE_TOKEN: ${{ github.token }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_MERGE: ${{ github.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           clone="$RUNNER_TEMP/fresh-clone.sh"
           cat > "$clone" <<'CLONE'
@@ -111,10 +118,15 @@ jobs:
           echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
           CLONE
           chmod +x "$clone"
-          # The engine reads the pull request's merge commit (what actions/checkout gave it) and the
-          # base's config file: one commit of each, never a filter.
-          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 --checkout "$PR_MERGE" \
-            "+$PR_MERGE:refs/check/merge" "+$PR_BASE:refs/check/base"
+          # The engine reads the pull request's merge commit (what actions/checkout gave it), and the
+          # config files of the base and of the default branch, never with a filter. One commit of each
+          # is enough, except for a possible sync (this repository's default branch into another
+          # branch), where the engine needs full history; it treats a shallow clone as no sync.
+          depth=(--depth 1)
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REF" = "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then depth=(); fi
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" \
+            "+$PR_MERGE:refs/check/merge" "+$PR_BASE:refs/check/base" \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -126,6 +138,9 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           CRATE_TOKENS_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'crate-tokens-exception') }}
           CRATE_TOKENS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CRATE_TOKENS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CRATE_TOKENS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          CRATE_TOKENS_REPO: ${{ github.repository }}
           TIKTOKEN_CACHE_DIR: ${{ runner.tool_cache }}/tiktoken
         run: |
           engine="$RUNNER_TEMP/check-crate-tokens.py"
@@ -150,7 +165,11 @@ jobs:
           #   check-crate-tokens.py --ci BASE        the working tree, and .crate-tokens may not add
           #                                          or raise baseline rows or add exempt lines
           #                                          compared with BASE unless
-          #                                          CRATE_TOKENS_EXCEPTION=true (the PR label)
+          #                                          CRATE_TOKENS_EXCEPTION=true (the PR label);
+          #                                          in a sync, also the default branch tip
+          # A sync: CRATE_TOKENS_HEAD_REF is the default branch, CRATE_TOKENS_HEAD_REPO is
+          # CRATE_TOKENS_REPO, and in a full clone HEAD has the tip of origin/<default branch> but
+          # BASE does not. Its lines passed on the default branch, so they count as old too.
           # An all-zero or missing BASE falls back to the merge-base with the default branch
           # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
           # Run with: uv run --script scripts/check-crate-tokens.py [mode], or through
@@ -417,18 +436,46 @@ jobs:
               return mb.decode().strip() if mb else None
 
 
+          def sync_tip(base):
+              """The tip of origin/<default branch> in a sync (see the top), else None."""
+              d, env = os.environ.get("CRATE_TOKENS_DEFAULT_BRANCH", ""), os.environ.get
+              if not d or env("CRATE_TOKENS_HEAD_REF", "") != d or not env("CRATE_TOKENS_REPO", "") \
+                      or env("CRATE_TOKENS_HEAD_REPO", "") != env("CRATE_TOKENS_REPO"):
+                  return None
+              tip = git("rev-parse", "-q", "--verify", f"origin/{d}^{{commit}}", check=False)
+              shallow = git("rev-parse", "--is-shallow-repository", check=False)
+              if not tip or (shallow or b"").strip() != b"false":
+                  return None
+              tip = tip.decode().strip()
+              if git("merge-base", "--is-ancestor", tip, "HEAD", check=False) is None:
+                  return None
+              if base and git("merge-base", "--is-ancestor", tip, base, check=False) is not None:
+                  return None
+              return tip
+
+
+          def old_config(ref, name, pre):
+              """(exempt, rows) of config NAME at commit REF; nothing for no REF or a broken file."""
+              text = git("show", f"{ref}:{name}", check=False) if ref else None
+              try:
+                  return parse_config((text or b"").decode(), f"{ref}:{name}", pre)
+              except ConfigError:
+                  return [], {}  # a broken old config grandfathers nothing
+
+
           def compare_base(base, per):
               """(config name, line) for each line a config file added or raised compared with the same
-              file at BASE."""
+              file at BASE (in a sync, also at the default branch tip)."""
               base = resolve_base(base)
+              tip = sync_tip(base)
               added = []
               for name, (exempt, rows) in per.items():
                   pre = prefix_of(name)
-                  old_text = git("show", f"{base}:{name}", check=False) if base else None
-                  try:
-                      old_exempt, old_rows = parse_config((old_text or b"").decode(), f"{base}:{name}", pre)
-                  except ConfigError:
-                      old_exempt, old_rows = [], {}  # a broken base config grandfathers nothing
+                  old_exempt, old_rows = old_config(base, name, pre)
+                  tip_exempt, tip_rows = old_config(tip, name, pre)
+                  old_exempt = old_exempt + tip_exempt
+                  for u, n in tip_rows.items():
+                      old_rows[u] = max(n, old_rows.get(u, 0))
                   added += [(name, f"new exempt line {g[len(pre):]}") for g in exempt if g not in old_exempt]
                   for u, n in sorted(rows.items()):
                       if u not in old_rows:
