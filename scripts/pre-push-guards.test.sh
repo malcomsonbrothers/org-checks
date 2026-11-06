@@ -89,6 +89,15 @@ expect "a sync merge on <p>/staging is not a release" 0 '82 unreleased commits o
 expect "nor are commits outside projects/<p>/" 0 'counted since origin/movopop/staging at 2026-01-03T'
 push swarm/run; expect "staging counts from its newest non-merge commit" 0 'counted since origin/staging at 2026-01-05T'
 
+# A sync of the default branch into <p>/swarm/run is not a release: what the default branch
+# holds is never counted, however many commits it brings; the project's own backlog still is.
+repo msync; cfg .release-guard 'refuse 101'; proj movopop; mark master; mark movopop/staging; mark movopop/swarm/run
+git checkout -q -b run; commits 10; git checkout -q master; commits 118; mark master
+git checkout -q run; git merge -q --no-ff -m sync master; push movopop/swarm/run
+quiet; expect "118 default-branch commits synced into <p>/swarm/run are not counted" 0
+commits 90; push movopop/swarm/run; expect "the project's own 100 still warn" 0 '100 unreleased commits on movopop/swarm/run'
+commits 1; push movopop/swarm/run; expect "and 101 are refused" 1 'push refused at 101 or more'
+
 # The org-hooks workflow runs on the default branch, staging and <p>/staging only. It accepts
 # this guard, and the previous copy only in a repository without projects/.
 wf="$here/.github/workflows/org-hooks.yml"
