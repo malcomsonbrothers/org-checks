@@ -9,8 +9,8 @@
 # Small favicons and app icons with image content pass; anything else needs a row. Never skips.
 #   check-binaries.sh [BASE [TIP]]   commits in BASE..TIP (TIP defaults to HEAD)
 #   check-binaries.sh --ci BASE TIP  the same, and .binary-allow may not add rows compared with
-#                                    BASE or the default branch tip. BINARIES_EXCEPTION=true (the
-#                                    PR label) allows new rows.
+#                                    BASE (in a sync, also the default branch tip, see below).
+#                                    BINARIES_EXCEPTION=true (the PR label) allows new rows.
 # The org lists are data: BINARIES_LISTS, else lists/no-binaries.txt beside this script, else the
 # copy on org-checks master. Commits already on the default branch are skipped: they passed in
 # their own pull request. A merge counts only files that differ from every parent. A missing BASE
@@ -218,9 +218,16 @@ if [ "$nfail" -gt 0 ]; then status=1
     "it so this check re-runs. Remove a committed secret and rotate it; deleting it does not unpublish it."
 fi
 
-# CI: each .binary-allow may only shrink against BASE; rows the default branch tip has passed there.
+# CI: each .binary-allow may only shrink against BASE. In a sync (BINARIES_HEAD_REF is the default
+# branch, BINARIES_HEAD_REPO is BINARIES_REPO, and in a full clone TIP has the tip of
+# origin/<default branch> but BASE not) rows that tip has passed there and count as old too.
 if [ "$ci" -eq 1 ]; then
-  for r in "$base" "$dflt"; do [ -z "$r" ] || rules_at "$r"; done | grep '^[AE] ' > "$tmp/old-rules" || true
+  d=${BINARIES_DEFAULT_BRANCH:-} sync=""
+  if [ -n "$d" ] && [ "${BINARIES_HEAD_REF:-}" = "$d" ] && [ -n "${BINARIES_REPO:-}" ] &&
+    [ "${BINARIES_HEAD_REPO:-}" = "$BINARIES_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") &&
+    [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" "$tip" &&
+    { [ -z "$base" ] || ! git merge-base --is-ancestor "$t" "$base"; }; then sync=$t; fi
+  for r in "$base" "$sync"; do [ -z "$r" ] || rules_at "$r"; done | grep '^[AE] ' > "$tmp/old-rules" || true
   awk 'FILENAME == ARGV[1] { old[$1 " " $2 " " $4] = 1; next }
     $1 ~ /^[AE]$/ && !(($1 " " $2 " " $4) in old) { print $4 " new " ($1 == "A" ? "allow" : "exempt") " row " $3 }' \
     "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
