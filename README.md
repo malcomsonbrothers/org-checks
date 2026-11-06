@@ -163,10 +163,11 @@ line (`#` starts a comment):
   limit); it does not fail on that, because token counts move with every
   edit.
 
-`.crate-tokens` may only shrink against the pull request base. A new or
-raised `baseline` row or a new `exempt` line fails unless a reviewer adds
-the `crate-tokens-exception` label to the pull request and then closes and
-reopens it.
+`.crate-tokens` may only shrink against the pull request base, and in a
+sync (see `.file-lengths`) also against the default branch tip, whose lines
+passed there. A new or raised `baseline` row or a new `exempt` line fails
+unless a reviewer adds the `crate-tokens-exception` label to the pull
+request and then closes and reopens it.
 
 ### Fixing a pull request that fails on units that were already too big
 

@@ -8,7 +8,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_COMMITTER_NAME=t \
   GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_EMAIL=t@example.com
-unset CRATE_TOKENS_EXCEPTION CRATE_TOKENS_DEFAULT_BRANCH
+unset CRATE_TOKENS_EXCEPTION CRATE_TOKENS_DEFAULT_BRANCH CRATE_TOKENS_HEAD_REF CRATE_TOKENS_HEAD_REPO CRATE_TOKENS_REPO
 passed=0 failed=0
 
 repo() { # fresh repo on master with one commit
@@ -161,6 +161,25 @@ check --ci HEAD~1; expect "a raised folder row" 1 "^\[FAIL\] projects/a/.crate-t
 pcfg a "baseline core $nc"; cfg "baseline projects/a $na"; save
 check --ci HEAD~1; expect "moving a row to the root is new there" 1 "^\[FAIL\] .crate-tokens: new baseline row projects/a $na$"
 
+# A sync (head ref is the default branch in this repository, HEAD has the tip of origin/<default>,
+# BASE does not) takes the tip's lines as old; any other pull request compares with BASE only.
+repo sync; crate a; small a/src/lib.rs; cfg 'baseline a 60000'; save; git branch staging
+export CRATE_TOKENS_DEFAULT_BRANCH=master CRATE_TOKENS_REPO=o/r
+cfg 'baseline a 65000' 'exempt data/**'; save; git update-ref refs/remotes/origin/master HEAD
+git checkout -q staging; small b.rs; save; git merge -q --no-edit master
+CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1; expect "a sync takes the default branch's lines" 0
+CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=fork/r check --ci HEAD^1; expect "a fork's default branch is no sync" 1 'new exempt line data/\*\*$'
+CRATE_TOKENS_HEAD_REF=feat CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1
+expect "a feature branch that merged the default branch tip gets no lines from it" 1 'raised from 60000 to 65000$'
+export CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=o/r
+git checkout -q -b feat HEAD^1; cfg 'baseline a 60000' 'exempt data/**'; save
+check --ci HEAD~1; expect "a feature branch adding the default branch's line still fails" 1 'new exempt line data/\*\*$'
+# Regrowth: master has 90000, staging lowered it to 70000; raising it back is not a sync.
+repo regrow; crate a; small a/src/lib.rs; cfg 'baseline a 90000'; save; git update-ref refs/remotes/origin/master HEAD
+git checkout -q -b staging; cfg 'baseline a 70000'; save; git checkout -q -b pr; cfg 'baseline a 90000'; save
+CRATE_TOKENS_HEAD_REF=feat check --ci staging; expect "a row regrown to the default branch's value is refused" 1 'raised from 70000 to 90000$'
+unset CRATE_TOKENS_DEFAULT_BRANCH CRATE_TOKENS_REPO CRATE_TOKENS_HEAD_REF CRATE_TOKENS_HEAD_REPO
+
 repo dotdir; crate projects/.hid; big projects/.hid/src/lib.rs; save; n=$(tokens projects/.hid)
 pcfg .hid "baseline . $n"; check; expect "a dot-folder config is not read" 1 '^\[FAIL\] projects/.hid: '
 
@@ -193,6 +212,9 @@ wf="$here/.github/workflows/crate-tokens.yml"
 run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "workflow: pull_request trigger, --ci against the base" 0
+# shellcheck disable=SC2016 # literal expressions in the workflow
+run grep -c -E 'CRATE_TOKENS_HEAD_REF: .*head\.ref }}$|CRATE_TOKENS_HEAD_REPO: .*head\.repo\.full_name }}$|CRATE_TOKENS_REPO: .*github\.repository }}$|"\+refs/heads/\$DEFAULT_BRANCH:refs/remotes/origin/\$DEFAULT_BRANCH"$' "$wf"
+expect "workflow: the engine can tell a sync and has the default branch tip" 0 '^4$'
 run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
 expect "one runner: self-hosted only for private and internal repositories" 0
 run grep -n -E 'uses: [^ ]*@[^ ]*$' "$wf"; expect "every action is pinned with a version comment" 1
