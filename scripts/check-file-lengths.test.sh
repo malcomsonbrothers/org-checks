@@ -211,7 +211,7 @@ run runners
   "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:    runs-on: ubuntu-latest" \
   "org-hooks.yml:    runs-on: ubuntu-latest" \
   "path-collisions.yml:$hybrid" \
-  "pr-title.yml:$hybrid" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
+  "pr-title.yml:$hybrid" "stale-pins.yml:    runs-on: ubuntu-latest" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
 expect "every workflow runs on its intended runner and no other" 0
 
 # The required workflow embeds this exact script.
