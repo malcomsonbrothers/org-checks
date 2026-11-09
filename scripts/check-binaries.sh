@@ -50,7 +50,6 @@ default_branch() {
   done
   return 0
 }
-
 # Turns a .binary-allow text (stdin) at path CFG in commit REF, with globs relative to folder PRE,
 # into rule records:   A|E regex glob config (allow or exempt row) | X error
 parse_rules() {
@@ -218,12 +217,15 @@ if [ "$nfail" -gt 0 ]; then status=1
     "it so this check re-runs. Remove a committed secret and rotate it; deleting it does not unpublish it."
 fi
 
-# CI: each .binary-allow may only shrink against BASE. In a sync (BINARIES_HEAD_REF is the default
-# branch, BINARIES_HEAD_REPO is BINARIES_REPO, and in a full clone TIP has the tip of
-# origin/<default branch> but BASE not) rows that tip has passed there and count as old too.
+# CI: only same-repository default or matching project sync heads can use approved default rows.
+# Full history must show the default tip in TIP but not BASE; new rows still need the label.
 if [ "$ci" -eq 1 ]; then
-  d=${BINARIES_DEFAULT_BRANCH:-} sync=""
-  if [ -n "$d" ] && [ "${BINARIES_HEAD_REF:-}" = "$d" ] && [ -n "${BINARIES_REPO:-}" ] &&
+  d=${BINARIES_DEFAULT_BRANCH:-} h=${BINARIES_HEAD_REF:-} sync=""
+  if [[ ${BINARIES_BASE_REF:-} =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)/staging$ ]]; then
+    p=${BASH_REMATCH[1]}
+    if [[ $h == "$p"/sync/?* ]] && [ "$(git cat-file -t "$base:projects/$p" 2>/dev/null)" = tree ]; then h=$d; fi
+  fi
+  if [ -n "$d" ] && [ "$h" = "$d" ] && [ -n "${BINARIES_REPO:-}" ] &&
     [ "${BINARIES_HEAD_REPO:-}" = "$BINARIES_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") &&
     [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" "$tip" &&
     { [ -z "$base" ] || ! git merge-base --is-ancestor "$t" "$base"; }; then sync=$t; fi

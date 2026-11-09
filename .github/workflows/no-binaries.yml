@@ -21,7 +21,8 @@
 #
 # .binary-allow may only shrink against the pull request base: a new row fails
 # unless the pull request has the binary-exception label. A sync is a pull
-# request from this repository's own default branch that brings the default
+# request from this repository's own default branch, or a matching
+# <project>/sync/* head into <project>/staging, that brings the default
 # branch tip into a base that lacks it; in a sync, rows the default branch tip
 # already has also count as old (they passed there). Required workflows
 # ignore labeled events, so after adding it close and reopen the pull request
@@ -135,6 +136,7 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           BINARIES_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'binary-exception') }}
           BINARIES_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BINARIES_BASE_REF: ${{ github.event.pull_request.base.ref }}
           BINARIES_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BINARIES_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BINARIES_REPO: ${{ github.repository }}
@@ -477,7 +479,6 @@ jobs:
             done
             return 0
           }
-
           # Turns a .binary-allow text (stdin) at path CFG in commit REF, with globs relative to folder PRE,
           # into rule records:   A|E regex glob config (allow or exempt row) | X error
           parse_rules() {
@@ -645,12 +646,15 @@ jobs:
               "it so this check re-runs. Remove a committed secret and rotate it; deleting it does not unpublish it."
           fi
 
-          # CI: each .binary-allow may only shrink against BASE. In a sync (BINARIES_HEAD_REF is the default
-          # branch, BINARIES_HEAD_REPO is BINARIES_REPO, and in a full clone TIP has the tip of
-          # origin/<default branch> but BASE not) rows that tip has passed there and count as old too.
+          # CI: only same-repository default or matching project sync heads can use approved default rows.
+          # Full history must show the default tip in TIP but not BASE; new rows still need the label.
           if [ "$ci" -eq 1 ]; then
-            d=${BINARIES_DEFAULT_BRANCH:-} sync=""
-            if [ -n "$d" ] && [ "${BINARIES_HEAD_REF:-}" = "$d" ] && [ -n "${BINARIES_REPO:-}" ] &&
+            d=${BINARIES_DEFAULT_BRANCH:-} h=${BINARIES_HEAD_REF:-} sync=""
+            if [[ ${BINARIES_BASE_REF:-} =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)/staging$ ]]; then
+              p=${BASH_REMATCH[1]}
+              if [[ $h == "$p"/sync/?* ]] && [ "$(git cat-file -t "$base:projects/$p" 2>/dev/null)" = tree ]; then h=$d; fi
+            fi
+            if [ -n "$d" ] && [ "$h" = "$d" ] && [ -n "${BINARIES_REPO:-}" ] &&
               [ "${BINARIES_HEAD_REPO:-}" = "$BINARIES_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") &&
               [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" "$tip" &&
               { [ -z "$base" ] || ! git merge-base --is-ancestor "$t" "$base"; }; then sync=$t; fi
