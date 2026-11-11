@@ -486,16 +486,18 @@ The self-hosted runners are shared and keep each repository's workspace
 between jobs, so another job can leave it as a blob-less (filtered) or
 shallow clone. `actions/checkout` reuses such a `.git`, and a check that
 later needs a missing blob fails because the job can no longer fetch it.
-So `commit-size.yml`, `file-lengths.yml`, `crate-tokens.yml` and
-`path-collisions.yml` never use
+So `commit-size.yml`, `file-lengths.yml`, `crate-tokens.yml`,
+`path-collisions.yml`, `no-binaries.yml`, `agent-guidance.yml` and
+`org-hooks.yml` never use
 the workspace: `scripts/fresh-clone.sh`, embedded between `<<'CLONE'` and
 `CLONE` like the engines, fetches the pull request into a new repository
 under `$RUNNER_TEMP`, never with a filter, using the job token through an
 environment-only header that is never written to `.git/config`. The commit
 size check fetches the full history of the base and head (fork heads come
 through the base repository); the file length and crate token checks fetch
-only the merge commit and the base commit, and the path collision check
-only the merge commit. `scripts/fresh-clone.test.sh`
+only the merge commit and the base commit, the path collision check
+only the merge commit, and the org hooks check only the pull request head,
+one commit deep. `scripts/fresh-clone.test.sh`
 replays the blob-less workspace failure and fails while a workflow's copy
 differs from the script.
 
