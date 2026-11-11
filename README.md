@@ -271,7 +271,7 @@ scripts/check-commit-size.sh origin/main HEAD
 ## No binaries
 
 Candidate required workflow: `.github/workflows/no-binaries.yml`
-(GitHub-hosted, no credentials). Adding it to the organisation ruleset is
+(no credentials). Adding it to the organisation ruleset is
 an owner step. Binaries do not belong in git, and neither
 do media, 3D and Blender files, model weights, archives, compiled code,
 databases, documents, secrets or junk. User-facing assets go to R2 and are
@@ -397,8 +397,8 @@ the two differ.
 
 ## Commit count
 
-Candidate required workflow: `.github/workflows/commit-count.yml`
-(GitHub-hosted). It is not in any ruleset yet. A pull request into the
+Candidate required workflow: `.github/workflows/commit-count.yml`.
+It is not in any ruleset yet. A pull request into the
 default branch, `staging` or `<project>/staging` may hold at most 95 commits: GitHub will not
 rebase-merge many more (about 100 work, 300 do not), and releases are never
 squashed. Release more often or split the pull request. The
@@ -407,8 +407,8 @@ request after adding it.
 
 ## Org hooks
 
-Candidate required workflow: `.github/workflows/org-hooks.yml`
-(GitHub-hosted). It is not in any ruleset yet. On pull requests into the
+Candidate required workflow: `.github/workflows/org-hooks.yml`.
+It is not in any ruleset yet. On pull requests into the
 default branch, `staging` or `<project>/staging`, every repository must ship
 `.githooks/org/pre-push-guards.sh` identical to this repository's
 `scripts/hooks/pre-push-guards.sh`, and an executable `.githooks/pre-push`
