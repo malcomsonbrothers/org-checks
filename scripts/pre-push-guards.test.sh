@@ -120,7 +120,7 @@ hooks() { # hooks GUARD-FILE [PROJECT]: run the workflow step on a repo shipping
   cd "$work" && rm -rf hooks && git init -q hooks && cd hooks && mkdir -p .githooks/org
   cp "$1" .githooks/org/pre-push-guards.sh && cp "$here/.githooks/pre-push" .githooks/
   if [ -n "${2:-}" ]; then mkdir -p "projects/$2" && echo x > "projects/$2/README"; fi; git add -A && commits 1
-  out=$(GUARD_BLOB=$(blob GUARD_BLOB) GUARD_BLOB_PREVIOUS=$(blob GUARD_BLOB_PREVIOUS) GITHUB_STEP_SUMMARY=/dev/null \
+  out=$(PR_HEAD=HEAD GUARD_BLOB=$(blob GUARD_BLOB) GUARD_BLOB_PREVIOUS=$(blob GUARD_BLOB_PREVIOUS) GITHUB_STEP_SUMMARY=/dev/null \
     bash "$work/org-hooks.sh" 2>&1) && rc=0 || rc=$?
 }
 hooks "$guard"; expect "org-hooks accepts this guard" 0 'org-hooks: ok'

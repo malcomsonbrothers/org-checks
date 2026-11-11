@@ -6,8 +6,8 @@
 # (GUARD_BLOB_PREVIOUS, which guards a single-project repository the same way), and an
 # executable .githooks/pre-push that calls it. Fix: run scripts/install-hooks.sh. It runs on pull
 # requests into the default branch, staging or <project>/staging (one folder segment).
-# It reads only the pull request head and holds no credentials beyond the
-# read-only job token.
+# It reads only the pull request head, fetched with depth 1 into a fresh clone, and holds no
+# credentials beyond the read-only job token, passed only in an environment-only header.
 
 name: Org Hooks
 
@@ -34,17 +34,85 @@ jobs:
           if [ "$BASE_REF" = "$DEFAULT_BRANCH" ] || [[ $BASE_REF =~ ^([^/]+/)?staging$ ]]; then echo run=true >> "$GITHUB_OUTPUT"
           else echo "org-hooks: $BASE_REF is not a staging branch: nothing to check"; fi
 
-      - if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout: .githooks
+      # A new clone in the job's temporary directory holding only the pull request head, never
+      # the runner's reused workspace (see scripts/fresh-clone.sh, embedded: paste it back
+      # between <<'CLONE' and CLONE, indented ten spaces, after editing).
+      - name: Fetch the pull request into a fresh clone
+        if: steps.gate.outputs.run == 'true'
+        env:
+          FRESH_CLONE_TOKEN: ${{ github.token }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          clone="$RUNNER_TEMP/fresh-clone.sh"
+          cat > "$clone" <<'CLONE'
+          #!/usr/bin/env bash
+          # Fetches the pull request into a new, empty repository for a required workflow, instead of
+          # trusting the runner's workspace. The self-hosted runners are shared and keep each repository's
+          # workspace between jobs, so another job may leave it blob-less (filtered), shallow or otherwise
+          # altered; actions/checkout reuses such a .git, a later read needs a blob the job can no longer
+          # fetch, and the check fails. Needs only bash and git (2.32 or later).
+          #   fresh-clone.sh DEST URL [--depth N] [--checkout COMMIT] REFSPEC...
+          # DEST is removed and created afresh, with origin at URL, then REFSPECs are fetched in one go:
+          # never with a filter, with full history unless --depth limits it. --checkout detaches HEAD at
+          # COMMIT with its files; without it there is no working tree checkout. FRESH_CLONE_TOKEN, when
+          # set, authenticates that one fetch through a header exported only for it, so it is never
+          # written to .git/config or any process's command line. The runner user's global and system git config are ignored.
+          set -euo pipefail
+          export LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+          unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+            GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+          fail() { echo "fresh-clone: $*" >&2; exit 2; }
+          usage="usage: fresh-clone.sh DEST URL [--depth N] [--checkout COMMIT] REFSPEC..."
+
+          [ $# -ge 2 ] || fail "$usage"
+          dest=$1 url=$2; shift 2
+          depth=() commit=""
+          while [ $# -gt 0 ]; do
+            case $1 in
+              --depth) [[ ${2:-} =~ ^[1-9][0-9]*$ ]] || fail "--depth needs a positive number"; depth=(--depth "$2"); shift 2 ;;
+              --checkout) [ -n "${2:-}" ] || fail "$usage"; commit=$2; shift 2 ;;
+              -*) fail "$usage" ;;
+              *) break ;;
+            esac
+          done
+          [ $# -gt 0 ] || fail "$usage"
+
+          rm -rf "$dest"
+          git init -q "$dest"
+          git -C "$dest" remote add origin "$url"
+          # The header is exported only around the fetch, never passed as an argument: the runners' users
+          # share /proc, where any process's command line is readable but its environment is not.
+          # printf and echo are builtins, so the token is in no command line here either.
+          if [ -n "${FRESH_CLONE_TOKEN:-}" ]; then
+            basic=$(printf 'x-access-token:%s' "$FRESH_CLONE_TOKEN" | base64 | tr -d '\n')
+            echo "::add-mask::$basic"
+            export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic"
+          fi
+          fetched=0
+          git -C "$dest" fetch --quiet --no-tags --no-recurse-submodules "${depth[@]}" origin "$@" && fetched=1
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 basic
+          [ "$fetched" -eq 1 ] || fail "could not fetch $* from $url"
+          if [ -n "$commit" ]; then git -C "$dest" checkout --quiet --detach "$commit" -- ||
+            fail "could not check out $commit"; fi
+
+          # The new repository must be complete: no promisor remote or filter, and full history unless
+          # --depth asked for less (a short history fetched with --depth is not shallow).
+          if git -C "$dest" config --get-regexp '^(remote\..*\.(promisor|partialclonefilter)|extensions\.partialclone)$'; then
+            fail "the new clone is a partial clone"
+          fi
+          if [ ${#depth[@]} -eq 0 ] && [ "$(git -C "$dest" rev-parse --is-shallow-repository)" != false ]; then
+            fail "the new clone is shallow"
+          fi
+          echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
+          CLONE
+          chmod +x "$clone"
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 "+$PR_HEAD:refs/check/head"
 
       - name: Check the org pre-push guards
         if: steps.gate.outputs.run == 'true'
+        working-directory: ${{ runner.temp }}/pr
         env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
           GUARD_BLOB: f7a3e74a28d3b0b87e6a5f2125920f2641099c54
           # Accepted only without projects/; remove at the next pin bump after 2026-11-06.
           GUARD_BLOB_PREVIOUS: 80d5e1d7d2c691067209aeb812cea054ddc8e1b3
@@ -53,13 +121,13 @@ jobs:
           guard=.githooks/org/pre-push-guards.sh
           install='curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/install-hooks.sh | bash'
           errors=()
-          blob=$(git rev-parse -q --verify "HEAD:$guard" || :)
+          blob=$(git rev-parse -q --verify "$PR_HEAD:$guard" || :)
           if [ -z "$blob" ]; then errors+=("$guard is missing")
-          elif [ "$blob" != "$GUARD_BLOB" ] && { [ "$blob" != "$GUARD_BLOB_PREVIOUS" ] || [ -n "$(git ls-tree -d HEAD projects)" ]; }; then
+          elif [ "$blob" != "$GUARD_BLOB" ] && { [ "$blob" != "$GUARD_BLOB_PREVIOUS" ] || [ -n "$(git ls-tree -d "$PR_HEAD" projects)" ]; }; then
             errors+=("$guard differs from the org-checks copy"); fi
-          mode=$(git ls-tree HEAD .githooks/pre-push | cut -d ' ' -f 1)
+          mode=$(git ls-tree "$PR_HEAD" .githooks/pre-push | cut -d ' ' -f 1)
           if [ "$mode" != 100755 ]; then errors+=(".githooks/pre-push is missing or not executable")
-          elif ! git show HEAD:.githooks/pre-push | grep -qF "$guard"; then errors+=(".githooks/pre-push does not call $guard"); fi
+          elif ! git show "$PR_HEAD:.githooks/pre-push" | grep -qF "$guard"; then errors+=(".githooks/pre-push does not call $guard"); fi
           if [ ${#errors[@]} -eq 0 ]; then echo "org-hooks: ok"; exit 0; fi
           echo "## Org hooks" >> "$GITHUB_STEP_SUMMARY"
           for e in "${errors[@]}"; do
