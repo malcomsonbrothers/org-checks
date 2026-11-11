@@ -202,14 +202,14 @@ run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, --ci against the base" 0
 run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only for private and internal repositories" 0
-# Every workflow's runner, exactly: commit-count, org-hooks and this repository's own tests
-# hold no checkout credentials and always run GitHub-hosted; no-binaries always runs GitHub-hosted too.
+# Every workflow's runner, exactly: the required and candidate checks use the hybrid runner;
+# stale-pins and this repository's own tests always run GitHub-hosted.
 runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }
 run runners
-[ "$out" = "$(printf '%s\n' "agent-guidance.yml:    runs-on: ubuntu-latest" \
-  "commit-count.yml:    runs-on: ubuntu-latest" "commit-size.yml:$hybrid" \
-  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:    runs-on: ubuntu-latest" \
-  "org-hooks.yml:    runs-on: ubuntu-latest" \
+[ "$out" = "$(printf '%s\n' "agent-guidance.yml:$hybrid" \
+  "commit-count.yml:$hybrid" "commit-size.yml:$hybrid" \
+  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:$hybrid" \
+  "org-hooks.yml:$hybrid" \
   "path-collisions.yml:$hybrid" \
   "pr-title.yml:$hybrid" "stale-pins.yml:    runs-on: ubuntu-latest" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
 expect "every workflow runs on its intended runner and no other" 0
