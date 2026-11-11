@@ -28,7 +28,7 @@
 # ignore labeled events, so after adding it close and reopen the pull request
 # to re-run.
 #
-# It needs no credentials and runs on GitHub-hosted runners. The engine below
+# It needs no credentials. The engine below
 # is scripts/check-binaries.sh and its lists scripts/lists/no-binaries.txt,
 # embedded so the job fetches nothing and the ruleset's pinned commit pins
 # both. After editing either, paste it back between <<'ENGINE' and ENGINE (or
@@ -48,7 +48,7 @@ permissions:
 
 jobs:
   no-binaries:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       # A new clone in the job's temporary directory (see scripts/fresh-clone.sh,

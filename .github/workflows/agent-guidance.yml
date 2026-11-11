@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   agent-guidance:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Fetch the pull request into a fresh clone
