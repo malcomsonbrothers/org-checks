@@ -51,7 +51,6 @@ jobs:
       - name: Fetch the pull request into a fresh clone
         env:
           FRESH_CLONE_TOKEN: ${{ github.token }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_MERGE: ${{ github.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -122,14 +121,41 @@ jobs:
           CLONE
           chmod +x "$clone"
           # The engine reads the pull request's merge commit (what actions/checkout gave it), and the
-          # config files of the base and of the default branch, never with a filter. One commit of each
-          # is enough, except for a possible sync (this repository's default branch into another
-          # branch), where the engine needs full history; it treats a shallow clone as no sync.
-          depth=(--depth 1)
+          # config files of its first parent (the base) and of the default branch, never with a filter.
+          # Two commits of each are enough (the merge and its parents), except for a possible sync (this
+          # repository's default branch into another branch), where the engine needs full history; it
+          # treats a shallow clone as no sync.
+          depth=(--depth 2)
           if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REF" = "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then depth=(); fi
           "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" \
-            "+$PR_MERGE:refs/check/merge" "+$PR_BASE:refs/check/base" \
+            "+$PR_MERGE:refs/check/merge" \
             "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          # Compare with the base branch tip the merge was built on, never the event's base.sha, which
+          # can be older (see scripts/current-base.sh, embedded like the clone script).
+          base_of="$RUNNER_TEMP/current-base.sh"
+          cat > "$base_of" <<'BASE'
+          #!/usr/bin/env bash
+          # Prints the base a required workflow compares a pull request with: the first parent of the pull
+          # request's merge commit (github.sha), the base branch tip GitHub built that merge on. Never the
+          # event's pull_request.base.sha: a reopened pull request keeps the base.sha from when it was
+          # opened while GitHub rebuilds the merge on the current tip, so comparing with it blames the pull
+          # request for rows the base branch gained since. Run it in the clone, after fetching the merge
+          # with its parents (depth 2 or more). Needs only bash and git.
+          #   current-base.sh MERGE
+          # Fails (exit 2) unless MERGE is a commit with exactly two parents, the first present with its tree.
+          set -euo pipefail
+          fail() { echo "current-base: $*" >&2; exit 2; }
+          [ $# -eq 1 ] && [ -n "$1" ] || fail "usage: current-base.sh MERGE"
+          merge=$(git rev-parse --verify --quiet "$1^{commit}") || fail "$1 is not a commit in this clone"
+          read -r -a ps < <(git rev-list --parents -n 1 "$merge" || :)
+          [ "${#ps[@]}" -eq 3 ] || fail "$merge is not a two-parent merge commit, or its parents were not fetched"
+          git cat-file -e "${ps[1]}^{tree}" 2>/dev/null || fail "the first parent ${ps[1]} of $merge was not fetched"
+          echo "${ps[1]}"
+          BASE
+          chmod +x "$base_of"
+          base=$(cd "$RUNNER_TEMP/pr" && "$base_of" "$PR_MERGE")
+          echo "CURRENT_BASE=$base" >> "$GITHUB_ENV"
+          echo "Comparing with $base, the first parent of the merge commit $PR_MERGE"
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -152,7 +178,6 @@ jobs:
       - name: Check crate and package token budgets
         working-directory: ${{ runner.temp }}/pr
         env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
           CRATE_TOKENS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CRATE_TOKENS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           CRATE_TOKENS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -577,7 +602,7 @@ jobs:
           ENGINE
           for attempt in 1 2; do
             status=0
-            out=$(uv run --no-config --quiet --script "$engine" --ci "$PR_BASE" 2>&1) || status=$?
+            out=$(uv run --no-config --quiet --script "$engine" --ci "$CURRENT_BASE" 2>&1) || status=$?
             # 0 passes and 1 is a real violation; anything else (a uv or network hiccup) is
             # not a verdict, so it gets one retry.
             if [ "$status" -le 1 ] || [ "$attempt" -eq 2 ]; then break; fi

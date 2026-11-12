@@ -198,7 +198,7 @@ RUNNER
 # The required workflow always enforces, on pull requests, on that runner.
 wf="$here/.github/workflows/file-lengths.yml"
 run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no report mode or workflow_call in the required workflow" 1
-run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
+run grep -n -E '^  pull_request:$|--ci "\$CURRENT_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, --ci against the base" 0
 run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only for private and internal repositories" 0
