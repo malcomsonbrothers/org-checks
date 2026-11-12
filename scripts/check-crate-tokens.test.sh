@@ -209,7 +209,7 @@ RUNNER
 
 # The workflow runs on pull requests, on that runner, and embeds this exact engine.
 wf="$here/.github/workflows/crate-tokens.yml"
-run grep -n -E '^  pull_request:$|--ci "\$PR_BASE"' "$wf"
+run grep -n -E '^  pull_request:$|--ci "\$CURRENT_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "workflow: pull_request trigger, --ci against the base" 0
 # shellcheck disable=SC2016 # literal expressions in the workflow

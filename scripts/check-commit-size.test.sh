@@ -210,8 +210,8 @@ RUNNER
 
 # The required workflow always enforces, on pull requests, on that runner.
 wf="$here/.github/workflows/commit-size.yml"
-# shellcheck disable=SC2016 # literal $PR_BASE and $PR_HEAD in the workflow
-run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened, labeled, unlabeled\]$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY" "\$\{refs\[@\]\}"$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
+# shellcheck disable=SC2016 # literal $CURRENT_BASE and $PR_HEAD in the workflow
+run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened, labeled, unlabeled\]$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY" "\$\{refs\[@\]\}"$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$CURRENT_BASE" "\$PR_HEAD"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 8 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, full fresh clone, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1

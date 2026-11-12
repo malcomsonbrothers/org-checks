@@ -497,12 +497,23 @@ the workspace: `scripts/fresh-clone.sh`, embedded between `<<'CLONE'` and
 `CLONE` like the engines, fetches the pull request into a new repository
 under `$RUNNER_TEMP`, never with a filter, using the job token through an
 environment-only header that is never written to `.git/config`. The commit
-size check fetches the full history of the base and head (fork heads come
-through the base repository); the file length and crate token checks fetch
-only the merge commit and the base commit, the path collision check
-only the merge commit, and the org hooks check only the pull request head,
-one commit deep. `scripts/fresh-clone.test.sh`
+size and no-binaries checks fetch the full history of the merge commit and
+head (fork heads come through the base repository); the file length and
+crate token checks fetch only the merge commit and its parents, two commits
+deep, the path collision check only the merge commit, and the org hooks
+check only the pull request head, one commit deep. `scripts/fresh-clone.test.sh`
 replays the blob-less workspace failure and fails while a workflow's copy
+differs from the script.
+
+Those four checks compare with the merge commit's first parent, the base
+branch tip GitHub built the merge on (`scripts/current-base.sh`, embedded
+between `<<'BASE'` and `BASE`), never the event's `pull_request.base.sha`.
+A reopened pull request keeps the base.sha from when it was opened while
+its merge is rebuilt on the current tip, so comparing with base.sha blamed
+it for allow-list rows the base branch gained since. The script fails
+unless the merge has two parents and the first was fetched.
+`scripts/current-base.test.sh` replays that stale base.sha, since GitHub's
+events cannot be replayed end to end, and fails while a workflow's copy
 differs from the script.
 
 A change merged here takes effect organisation-wide only when the ruleset's

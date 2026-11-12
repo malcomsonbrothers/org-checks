@@ -49,7 +49,7 @@ expect "old: a reused blob-less workspace fails the commit size check" 2 'promis
 # The new way: a full clone in a new directory, which needs nothing from the remote afterwards.
 offline() { mv "$work/remote.git" "$work/offline.git"; "$@"; mv "$work/offline.git" "$work/remote.git"; }
 cd "$work" && cp -R workspace dest # DEST may hold a partial clone too: it is replaced
-run "$clone" "$work/dest" "$url" "+$base:refs/check/base" "+$head:refs/check/head" \
+run "$clone" "$work/dest" "$url" "+$merge:refs/check/merge" "+$head:refs/check/head" \
   "+refs/heads/master:refs/remotes/origin/master"
 expect "commit-size clone: full history, no filter" 0 'fetched'
 run git -C "$work/dest" config --get-regexp 'promisor|partialclonefilter|partialclone'; expect "no promisor config" 1
@@ -60,9 +60,9 @@ cd "$work/dest"
 offline run "$here/scripts/check-commit-size.sh" --ci "$base" "$head"
 expect "commit-size passes offline in the fresh clone" 0 '2 commit(s) checked'
 
-# file-lengths and crate-tokens: the merge commit checked out and the base, one commit each.
-run "$clone" "$work/merge" "$url" --depth 1 --checkout "$merge" "+$merge:refs/check/merge" "+$base:refs/check/base"
-expect "file-lengths clone: depth 1 and checkout" 0 "checked out $merge"
+# file-lengths and crate-tokens: the merge commit checked out with its parents, two commits deep.
+run "$clone" "$work/merge" "$url" --depth 2 --checkout "$merge" "+$merge:refs/check/merge"
+expect "file-lengths clone: depth 2 and checkout" 0 "checked out $merge"
 [ "$(git -C "$work/merge" rev-parse HEAD)" = "$merge" ] && [ -f "$work/merge/b.rs" ] && rc=0 || rc=1
 expect "HEAD is the merge commit, with its files" 0
 cd "$work/merge"
