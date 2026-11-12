@@ -211,7 +211,7 @@ RUNNER
 # The required workflow always enforces, on pull requests, on that runner.
 wf="$here/.github/workflows/commit-size.yml"
 # shellcheck disable=SC2016 # literal $PR_BASE and $PR_HEAD in the workflow
-run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened\]$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY" "\$\{refs\[@\]\}"$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
+run grep -n -E '^  pull_request:$|^    types: \[opened, synchronize, reopened, labeled, unlabeled\]$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY" "\$\{refs\[@\]\}"$|COMMIT_SIZE_HEAD_REF: .*head\.ref }}$|COMMIT_SIZE_HEAD_REPO: .*head\.repo\.full_name }}$|COMMIT_SIZE_REPO: .*github\.repository }}$|timeout-minutes: 15$|--ci "\$PR_BASE" "\$PR_HEAD"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 8 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, full fresh clone, --ci BASE HEAD" 0
 run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
@@ -224,7 +224,7 @@ run grep -c -F -e '[[ $HEAD_REF =~ ^([^/]+/)?staging$ ]]' -e 'refs+=("+refs/head
 
 # commit-count counts only pull requests into the default branch, staging and one-segment <p>/staging.
 cc="$here/.github/workflows/commit-count.yml"
-awk '/^        run: \|$/ { on = 1; next } on { sub(/^          /, ""); print }' "$cc" > "$work/count.sh"
+awk '/- name: Count the pull request/ { step = 1 } step && /^        run: \|$/ { on = 1; next } on { sub(/^          /, ""); print }' "$cc" > "$work/count.sh"
 for b in main staging movopop/staging a/b/staging feature/x; do
   run env COMMITS=200 EXCEPTION=false BASE_REF=$b DEFAULT_BRANCH=main GITHUB_STEP_SUMMARY=/dev/null bash "$work/count.sh"
   printf '%s=%s ' "$b" "$rc"

@@ -36,12 +36,15 @@ name: Commit Size
 
 on:
   pull_request:
-    # Required workflows ignore labeled/unlabeled events, so after adding the
-    # commit-size-exception label, close and reopen the pull request to re-run.
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
+    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
+    # changing the commit-size-exception label, re-run the failed check: it reads the labels live.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   commit-size:
@@ -133,6 +136,20 @@ jobs:
           fi
           "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${refs[@]}"
 
+      # The label as it is now, read through the API, not from the event: gh pr create --label adds
+      # labels just after the opened event, and a re-run replays the original event.
+      - name: Read the commit-size-exception label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
+          if grep -qxF 'commit-size-exception' <<<"$labels"; then value=true; else value=false; fi
+          echo "COMMIT_SIZE_EXCEPTION=$value" >> "$GITHUB_ENV"
+          echo "commit-size-exception label on the pull request: $value"
+
       - name: Check commit sizes
         working-directory: ${{ runner.temp }}/pr
         env:
@@ -142,7 +159,6 @@ jobs:
           COMMIT_SIZE_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           COMMIT_SIZE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           COMMIT_SIZE_REPO: ${{ github.repository }}
-          COMMIT_SIZE_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'commit-size-exception') }}
           COMMIT_SIZE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           engine="$RUNNER_TEMP/check-commit-size.sh"

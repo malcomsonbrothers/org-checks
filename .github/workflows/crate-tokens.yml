@@ -31,12 +31,15 @@ name: Crate Tokens
 
 on:
   pull_request:
-    # Required workflows ignore labeled/unlabeled events, so after adding the
-    # crate-tokens-exception label, close and reopen the pull request to re-run.
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
+    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
+    # changing the crate-tokens-exception label, re-run the failed check: it reads the labels live.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   crate-tokens:
@@ -132,11 +135,24 @@ jobs:
         with:
           version: "0.13.0"
 
+      # The label as it is now, read through the API, not from the event: gh pr create --label adds
+      # labels just after the opened event, and a re-run replays the original event.
+      - name: Read the crate-tokens-exception label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
+          if grep -qxF 'crate-tokens-exception' <<<"$labels"; then value=true; else value=false; fi
+          echo "CRATE_TOKENS_EXCEPTION=$value" >> "$GITHUB_ENV"
+          echo "crate-tokens-exception label on the pull request: $value"
+
       - name: Check crate and package token budgets
         working-directory: ${{ runner.temp }}/pr
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-          CRATE_TOKENS_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'crate-tokens-exception') }}
           CRATE_TOKENS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CRATE_TOKENS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           CRATE_TOKENS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}

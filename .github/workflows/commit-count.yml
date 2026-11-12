@@ -10,9 +10,14 @@ name: Commit Count
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
+    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
+    # changing the commit-count-exception label, re-run the failed check: it reads the labels live.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
-permissions: {}
+permissions:
+  issues: read
+  pull-requests: read
 
 jobs:
   commit-count:
@@ -21,12 +26,25 @@ jobs:
     runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 2
     steps:
+      # The label as it is now, read through the API, not from the event: gh pr create --label adds
+      # labels just after the opened event, and a re-run replays the original event.
+      - name: Read the commit-count-exception label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
+          if grep -qxF 'commit-count-exception' <<<"$labels"; then value=true; else value=false; fi
+          echo "EXCEPTION=$value" >> "$GITHUB_ENV"
+          echo "commit-count-exception label on the pull request: $value"
+
       - name: Count the pull request's commits
         env:
           COMMITS: ${{ github.event.pull_request.commits }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'commit-count-exception') }}
         run: |
           set -euo pipefail
           if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && ! [[ $BASE_REF =~ ^([^/]+/)?staging$ ]]; then

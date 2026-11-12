@@ -31,12 +31,15 @@ name: File Lengths
 
 on:
   pull_request:
-    # Required workflows ignore labeled/unlabeled events, so after adding the
-    # file-lengths-exception label, close and reopen the pull request to re-run.
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
+    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
+    # changing the file-lengths-exception label, re-run the failed check: it reads the labels live.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   file-lengths:
@@ -128,11 +131,24 @@ jobs:
             "+$PR_MERGE:refs/check/merge" "+$PR_BASE:refs/check/base" \
             "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
 
+      # The label as it is now, read through the API, not from the event: gh pr create --label adds
+      # labels just after the opened event, and a re-run replays the original event.
+      - name: Read the file-lengths-exception label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
+          if grep -qxF 'file-lengths-exception' <<<"$labels"; then value=true; else value=false; fi
+          echo "FILE_LENGTHS_EXCEPTION=$value" >> "$GITHUB_ENV"
+          echo "file-lengths-exception label on the pull request: $value"
+
       - name: Check file lengths
         working-directory: ${{ runner.temp }}/pr
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-          FILE_LENGTHS_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'file-lengths-exception') }}
           FILE_LENGTHS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           FILE_LENGTHS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           FILE_LENGTHS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
