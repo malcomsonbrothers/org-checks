@@ -39,12 +39,15 @@ name: No Binaries
 
 on:
   pull_request:
-    # Required workflows ignore labeled/unlabeled events, so after adding the
-    # binary-exception label, close and reopen the pull request to re-run.
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
+    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
+    # changing the binary-exception label, re-run the failed check: it reads the labels live.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   no-binaries:
@@ -129,12 +132,25 @@ jobs:
             "+$PR_HEAD:refs/check/head" "+$PR_BASE:refs/check/base" \
             "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
 
+      # The label as it is now, read through the API, not from the event: gh pr create --label adds
+      # labels just after the opened event, and a re-run replays the original event.
+      - name: Read the binary-exception label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
+          if grep -qxF 'binary-exception' <<<"$labels"; then value=true; else value=false; fi
+          echo "BINARIES_EXCEPTION=$value" >> "$GITHUB_ENV"
+          echo "binary-exception label on the pull request: $value"
+
       - name: Check for binaries
         working-directory: ${{ runner.temp }}/pr
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          BINARIES_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'binary-exception') }}
           BINARIES_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           BINARIES_BASE_REF: ${{ github.event.pull_request.base.ref }}
           BINARIES_HEAD_REF: ${{ github.event.pull_request.head.ref }}

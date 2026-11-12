@@ -58,9 +58,13 @@ it applies the organisation limits with nothing exempt. A repository's
 
 `.file-lengths` may only shrink against the pull request base. A new or
 raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
-`file-lengths-exception` label to the pull request and then closes and
-reopens it. Required workflows do not re-run on label changes, so the
-reopen is what makes the check see the label.
+`file-lengths-exception` label to the pull request and then re-runs the
+failed check (or closes and reopens the pull request). Required workflows
+do not re-run on label changes, and a re-run replays the original event, so
+every label-gated check (file lengths, crate tokens, commit size,
+no-binaries, commit count) reads the pull request's current labels through
+the API instead of the event. That also catches labels added just after
+the pull request opened, as `gh pr create --label` does.
 
 A sync is a pull request whose head branch is the repository's own default
 branch (not a fork's) and whose head brings in the tip of the default
