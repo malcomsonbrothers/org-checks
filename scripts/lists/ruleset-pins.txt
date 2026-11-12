@@ -3,10 +3,10 @@
 # bump it here in the same change. scripts/check-ruleset-pins.sh (run daily by stale-pins.yml)
 # fails while a pinned file differs from master, and, given the live ruleset, while this list
 # differs from it.
-.github/workflows/file-lengths.yml 152a64ad4de2724ef2ce5f4e0760bbfe7fe904ed
+.github/workflows/file-lengths.yml 7c41718dc43069b019de75f79a5dff350c24b525
 .github/workflows/pr-title.yml 13e53a5b9ec408a710b656344045bea180dcb949
-.github/workflows/crate-tokens.yml 74ea7e4b85932819b5d1bd5a5cf1dbc141289b98
-.github/workflows/commit-size.yml 90b9c412a5631a8242c27648546d23b6451fa6c1
+.github/workflows/crate-tokens.yml 7c41718dc43069b019de75f79a5dff350c24b525
+.github/workflows/commit-size.yml 7c41718dc43069b019de75f79a5dff350c24b525
 .github/workflows/path-collisions.yml 97138a0ee47c25cd356dc50df3ad5892638fab0f
-.github/workflows/no-binaries.yml a120e52199814932888aaf9153de0a3ce37c0718
+.github/workflows/no-binaries.yml 7c41718dc43069b019de75f79a5dff350c24b525
 .github/workflows/agent-guidance.yml a120e52199814932888aaf9153de0a3ce37c0718
