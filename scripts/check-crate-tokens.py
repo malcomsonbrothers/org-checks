@@ -134,8 +134,12 @@ def prefix_of(name):
     return name[: -len(CONFIG)]
 
 
-def config_names():
-    """.crate-tokens and each projects/<p>/.crate-tokens in the working tree."""
+def config_names(paths=None):
+    """Root and project configs, in a tree or the working directory."""
+    if paths is not None:
+        return [CONFIG] + sorted(p for p in paths if p.count("/") == 2
+                                and p.startswith("projects/") and p.endswith("/" + CONFIG)
+                                and PROJECT.fullmatch(p.split("/")[1]))
     names = [CONFIG]
     if os.path.isdir("projects"):
         names += sorted(f"projects/{d}/{CONFIG}" for d in os.listdir("projects")
@@ -143,13 +147,14 @@ def config_names():
     return names
 
 
-def load_configs(names):
+def load_configs(names, reader=None):
     """Returns (exempt globs, {unit: tokens}, {config name: (exempt, rows)}) for every config;
     raises ConfigError on bad lines or a unit with rows in two files."""
     exempt, rows, per, errors = [], {}, {}, []
     for name in names:
         try:
-            e, r = parse_config(read_text(name), name, prefix_of(name))
+            text = (reader(name) or b"").decode("utf-8") if reader else read_text(name)
+            e, r = parse_config(text, name, prefix_of(name))
         except ConfigError as err:
             errors.append(str(err))
             continue
@@ -169,7 +174,7 @@ def skipped(path, exempt_res):
         return True
     if any(p in SKIP_DIRS for p in parts[:-1]):
         return True
-    if path.startswith(VENDORED) or (len(parts) == 3 and parts[0] == "projects" and name == CONFIG):
+    if path == CONFIG or path.startswith(VENDORED) or (len(parts) == 3 and parts[0] == "projects" and name == CONFIG):
         return True
     return any(r.match(path) for r in exempt_res)
 
@@ -194,7 +199,7 @@ def read_text(path):
         return f.read()
 
 
-def workspace_root(path, paths):
+def workspace_root(path, paths, reader=None):
     """A package.json with "workspaces", or beside pnpm-workspace.yaml, is like a Cargo virtual
     manifest: it only lists packages, so it is not a unit itself."""
     if path.rsplit("/", 1)[0] + "/pnpm-workspace.yaml" in paths or (
@@ -202,13 +207,13 @@ def workspace_root(path, paths):
     ):
         return True
     try:
-        manifest = json.loads(read(path) or b"")
+        manifest = json.loads((reader or read)(path) or b"")
     except ValueError:
         return False
     return isinstance(manifest, dict) and "workspaces" in manifest
 
 
-def discover(paths):
+def discover(paths, reader=None):
     """Unit directories: a Cargo.toml with [package], or a package.json that is not only a
     workspace root, outside build output and node_modules."""
     units, present = set(), set(paths)
@@ -218,10 +223,10 @@ def discover(paths):
             continue
         d = "/".join(parts[:-1]) or "."
         if parts[-1] == "package.json":
-            if not workspace_root(p, present):
+            if not workspace_root(p, present, reader):
                 units.add(d)
         elif parts[-1] == "Cargo.toml":
-            data = read(p)
+            data = (reader or read)(p)
             if data is not None and PACKAGE_TABLE.search(data):
                 units.add(d)
     return units
@@ -240,35 +245,120 @@ def owner(path, units):
     return "." if "." in units else None
 
 
-def measure(exempt):
-    out = git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
-    paths = sorted(set(filter(None, out.decode("utf-8", "surrogateescape").split("\0"))))
-    units = discover(paths)
+def source_text(path, exempt_res, reader):
+    if skipped(path, exempt_res):
+        return None
+    data = reader(path)
+    if data is None or b"\0" in data or GENERATED_MARK.search(data[:1024]):
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def measure(exempt, paths=None, reader=None, units=None, selected=None):
+    reader = reader or read
+    if paths is None:
+        out = git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
+        paths = sorted(set(filter(None, out.decode("utf-8", "surrogateescape").split("\0"))))
+    units = discover(paths, reader) if units is None else units
     exempt_res = [glob_re(g) for g in exempt]
     owners, texts, kinds = [], [], []
+    counted = units if selected is None else units & set(selected)
     for p in paths:
         u = owner(p, units)
-        if u is None or skipped(p, exempt_res):
+        if u not in counted:
             continue
-        data = read(p)
-        if data is None or b"\0" in data or GENERATED_MARK.search(data[:1024]):
-            continue
-        try:
-            texts.append(data.decode("utf-8"))
-        except UnicodeDecodeError:
-            continue
-        owners.append(u)
-        kinds.append(2 if migration(p) else 0)
-    counts = {u: [0, 0, 0] for u in units}  # counted tokens, counted files, migration tokens
+        text = source_text(p, exempt_res, reader)
+        if text is not None:
+            texts.append(text)
+            owners.append(u)
+            kinds.append(2 if migration(p) else 0)
+    counts = {u: [0, 0, 0] for u in counted}
     if texts:
         import tiktoken
 
         enc = tiktoken.get_encoding("o200k_base")
-        for u, k, toks in zip(owners, kinds, enc.encode_ordinary_batch(texts)):
+        for u, k, toks in zip(owners, kinds, enc.encode_ordinary_batch(texts, num_threads=1)):
             counts[u][k] += len(toks)
             counts[u][1] += not k
-    return {escape(u): ((raw * 3 + 1) // 2, files, (mig * 3 + 1) // 2)
+    return {u: ((raw * 3 + 1) // 2, files, (mig * 3 + 1) // 2)
             for u, (raw, files, mig) in counts.items()}
+
+
+def batch_blobs(oids):
+    """Read unique blobs in one batch, checking every response, including missing objects."""
+    want = sorted(set(oids))
+    out = git("cat-file", "--batch", data="".join(o + "\n" for o in want).encode()) if want else b""
+    blobs, pos = {}, 0
+    for oid in want:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].split()
+        if len(header) != 3 or header[0].decode() != oid or header[1] != b"blob":
+            raise ConfigError("missing config/source blob; fetch complete objects before checking")
+        size = int(header[2])
+        blobs[oid] = out[end + 1:end + 1 + size]
+        pos = end + size + 2
+    return blobs
+
+
+class Tree:
+    """Immutable two-tree input. A supplied unit list restricts source and manifest reads."""
+    def __init__(self, ref, selected=None):
+        scopes = set(selected or [])
+        for u in list(scopes):
+            parts = [] if u == "." else u.split("/")
+            for i in range(len(parts)):
+                pre = "/".join(parts[:i])
+                scopes.update((pre + "/" if pre else "") + n
+                              for n in ("Cargo.toml", "package.json", "pnpm-workspace.yaml"))
+        self.entries, self.data = {}, {}
+        for rec in git("ls-tree", "-r", "-z", ref, "--", *sorted(scopes)).split(b"\0"):
+            if not rec:
+                continue
+            meta, path = rec.split(b"\t", 1)
+            mode, kind, oid = meta.split()
+            self.entries[path.decode("utf-8", "surrogateescape")] = oid.decode() if kind == b"blob" and mode != b"120000" else None
+        self.load(p for p in self.entries if p.rsplit("/", 1)[-1] in ("Cargo.toml", "package.json"))
+        self.units = discover(self.entries, self.read)
+
+    def load(self, paths):
+        want = {p: self.entries[p] for p in paths if self.entries.get(p) and p not in self.data}
+        blobs = batch_blobs(want.values())
+        self.data.update((p, blobs[o]) for p, o in want.items())
+
+    def read(self, path):
+        return self.data.get(path)
+
+    def measure(self, exempt, selected=None):
+        res = [glob_re(g) for g in exempt]
+        self.load(p for p in self.entries if (selected is None or owner(p, self.units) in selected)
+                  and not skipped(p, res))
+        return measure(exempt, self.entries, self.read, self.units, selected)
+
+
+def unit_verdict(count, row=None, *, old_count=None, old_row=None, touched=False, exists=True):
+    """Shared pure policy: return (failure messages, warnings), without unit-name prefixes.
+    old_count is the measured base count, not row slack. None means no range comparison.
+    Callers also compare configs to reject additions/raises even on untouched units."""
+    failures, warnings = [], []
+    if touched and old_row is not None:
+        if not exists or count <= LIMIT:
+            if row is not None:
+                failures.append("within the limit or deleted; remove its baseline row")
+        else:
+            if old_count is None or count >= old_count or count >= old_row:
+                failures.append(f"{count} tokens must be strictly below measured base {old_count} and baseline {old_row}; split it")
+            if row != count:
+                failures.append(f"ratchet its row to baseline <unit> {count}")
+    if row is not None and count > row:
+        failures.append(f"{count} tokens, baseline {row} (grew; split it)")
+    elif row is None and count > LIMIT:
+        failures.append(f"{count} tokens, limit {LIMIT} (split it)")
+    if touched and count >= 45_000:
+        warnings.append(f"{count} tokens, approaching the {LIMIT} limit; split it")
+    return failures, warnings
 
 
 def default_branch():
@@ -363,7 +453,7 @@ def main(argv):
     if mode == "--report":
         print(f"{'tokens':>8} {'files':>6} {'migrations':>10}  unit")
         for u, (n, f, m) in sorted(counts.items(), key=lambda kv: (-kv[1][0], kv[0])):
-            print(f"{n:>8} {f:>6} {m:>10}  {u}")
+            print(f"{n:>8} {f:>6} {m:>10}  {escape(u)}")
         return 0
     if mode == "--print-baseline":
         for u in sorted(counts):
@@ -372,15 +462,17 @@ def main(argv):
         return 0
     src = {u: name for name, (_, r) in per.items() for u in r}
     bad = 0
-    for u in sorted(counts):
-        n = counts[u][0]
-        if u in rows:
-            if n > rows[u]:
-                print(f"[FAIL] {u}: {n} tokens, baseline {rows[u]} (grew; shrink it to {rows[u]} or fewer, or split it)")
+    for unit in sorted(counts):
+        n, u = counts[unit][0], escape(unit)
+        if unit in rows:
+            row = rows[unit]
+
+            if n > row:
+                print(f"[FAIL] {u}: {n} tokens, baseline {row} (grew; shrink it to {row} or fewer, or split it)")
                 bad += 1
             elif n <= LIMIT:
-                print(f"note: {u}: {n} tokens is within the limit {LIMIT}; delete its {src[u]} row")
-            elif n < rows[u]:
+                print(f"note: {u}: {n} tokens is within the limit {LIMIT}; delete its {src[unit]} row")
+            elif n < row:
                 print(f"note: {u}: shrank to {n} tokens; lower its row to \"baseline {u} {n}\"")
         elif n > LIMIT:
             print(f"[FAIL] {u}: {n} tokens, limit {LIMIT} (split it)")
