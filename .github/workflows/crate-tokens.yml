@@ -471,13 +471,15 @@ jobs:
                           pre = "/".join(parts[:i])
                           scopes.update((pre + "/" if pre else "") + n
                                         for n in ("Cargo.toml", "package.json", "pnpm-workspace.yaml"))
-                  self.entries, self.data = {}, {}
+                  self.entries, self.data, self.modes = {}, {}, {}
                   for rec in git("ls-tree", "-r", "-z", ref, "--", *sorted(scopes)).split(b"\0"):
                       if not rec:
                           continue
                       meta, path = rec.split(b"\t", 1)
                       mode, kind, oid = meta.split()
-                      self.entries[path.decode("utf-8", "surrogateescape")] = oid.decode() if kind == b"blob" and mode != b"120000" else None
+                      path = path.decode("utf-8", "surrogateescape")
+                      self.entries[path] = oid.decode() if kind == b"blob" and mode != b"120000" else None
+                      self.modes[path] = mode
                   self.load(p for p in self.entries if p.rsplit("/", 1)[-1] in ("Cargo.toml", "package.json")
                             and not any(d in SKIP_DIRS for d in p.split("/")[:-1]))
                   self.units = discover(self.entries, self.read)
@@ -502,8 +504,8 @@ jobs:
                   for p in self.entries.keys() | other.entries.keys():
                       if migration(p) or (skipped(p, res) and skipped(p, other_res)):
                           continue
-                      if (self.entries.get(p), owner(p, self.units), skipped(p, res)) != (
-                              other.entries.get(p), owner(p, other.units), skipped(p, other_res)):
+                      if (self.entries.get(p), self.modes.get(p), owner(p, self.units), skipped(p, res)) != (
+                              other.entries.get(p), other.modes.get(p), owner(p, other.units), skipped(p, other_res)):
                           candidates.append(p)
                   self.load(candidates)
                   other.load(candidates)
@@ -511,7 +513,7 @@ jobs:
                   for p in candidates:
                       a, b = source_text(p, res, self.read), source_text(p, other_res, other.read)
                       u, v = owner(p, self.units), owner(p, other.units)
-                      if (u, a) != (v, b):
+                      if (u, a, self.modes.get(p)) != (v, b, other.modes.get(p)):
                           touched.update(w for w, text in ((u, a), (v, b)) if w is not None and text is not None)
                   return touched | (self.units - other.units)
 
