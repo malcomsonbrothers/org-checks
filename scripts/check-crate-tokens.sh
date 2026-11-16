@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Runs check-crate-tokens.py through uv, so the check works as a one-liner with nothing
-# cloned. At a repository root, to grandfather every unit already over the limit:
-#   curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |
-#     bash -s -- --print-baseline >> .crate-tokens
-# Arguments go to check-crate-tokens.py (--report, --print-baseline, --ci BASE). The engine
+# cloned. Oversized units must be split; no new allowances are permitted.
+# Arguments go to check-crate-tokens.py (--report, --ci BASE, --range BASE TIP UNIT...). The engine
 # is the one beside this script, else CRATE_TOKENS_ENGINE, else org-checks master.
 set -euo pipefail
 url=https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.py

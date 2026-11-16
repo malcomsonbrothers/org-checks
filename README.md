@@ -61,8 +61,7 @@ raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
 `file-lengths-exception` label to the pull request and then re-runs the
 failed check (or closes and reopens the pull request). Required workflows
 do not re-run on label changes, and a re-run replays the original event, so
-every label-gated check (file lengths, crate tokens, commit size,
-no-binaries, commit count) reads the pull request's current labels through
+every label-gated check (file lengths, commit size, no-binaries, commit count) reads the pull request's current labels through
 the API instead of the event. That also catches labels added just after
 the pull request opened, as `gh pr create --label` does.
 
@@ -156,48 +155,75 @@ grandfathered by their `.file-lengths` baseline rows.
 ### `.crate-tokens`
 
 Without a `.crate-tokens` file at the repository root every unit gets the
-limit with nothing exempt. A repository's `.crate-tokens` may add, one per
-line (`#` starts a comment):
+limit with nothing exempt. Existing files contain one directive per line
+(`#` starts a comment):
 
 - `exempt <glob>` for generated or vendored paths, with the same glob
   syntax as `.file-lengths`
-- `baseline <unit> <tokens>` for a grandfathered unit. It fails once the
-  unit grows past its row. When the unit shrinks the check prints a note
-  asking you to lower the row (or delete it once the unit is within the
-  limit); it does not fail on that, because token counts move with every
-  edit.
+- `baseline <unit> <tokens>` for an existing grandfathered unit, with `.`
+  naming the repository root. Paths must be canonical repository-relative
+  paths, without absolute paths, empty segments or `.` / `..` segments.
 
-`.crate-tokens` may only shrink against the pull request base, and in a
-sync (see `.file-lengths`) also against the default branch tip, whose lines
-passed there. A new or raised `baseline` row or a new `exempt` line fails
-unless a reviewer adds the `crate-tokens-exception` label to the pull
-request and then closes and reopens it.
+**No new or raised baseline row, and no new exemption, is permitted.**
+There is no label or environment-variable bypass, including for syncs.
+Units without a row must be at most 50,000 tokens: split oversized code,
+never add an allowance. Moving a row between config files is an addition.
+Config files themselves are excluded from measurement.
 
-### Fixing a pull request that fails on units that were already too big
+**Touch it, split it.** For every unit with a row on the current base whose
+measured source changes, the new count must be strictly below both its
+measured base count and its base row. Above 50,000, ratchet the row to the
+exact new count. At or below 50,000, remove the row. A deleted unit must
+lose its row. Lockfile-only, migration-only and exempt/generated-only
+changes are not touches. Ownership changes are checked in both trees, so
+moving source between units does not hide a touch. Untouched grandfathered
+units still pass within their existing budget. Touched units at or above
+45,000 print `[WARN]`; warnings alone exit successfully.
 
-With [uv](https://docs.astral.sh/uv/) installed, run this at the root of a
-clean checkout of the pull request branch (the check also counts untracked,
-non-ignored files, so stray local files would inflate the rows) and commit
-`.crate-tokens`:
+A proposed new row also undergoes an accepted-history check: one config-only
+history walk over the current protected base and trusted default branch,
+then one batched blob read. A path that appeared in any accepted root or
+project config cannot regain an allowance after removal or relocation.
+The pull request's own new commits are not accepted history. Full history
+is fetched only when a config-only preflight finds a candidate addition;
+incomplete, filtered or unavailable history fails closed. History never
+authorises a first allowance: all additions are refused regardless.
+
+### Checking locally and fixing a failure
+
+Split the named unit and lower or remove its existing row as required.
+With [uv](https://docs.astral.sh/uv/) installed, from a clone:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |
-  bash -s -- --print-baseline >> .crate-tokens
+scripts/check-crate-tokens.sh --report
+scripts/check-crate-tokens.sh --ci origin/main
+scripts/check-crate-tokens.sh --range origin/main HEAD crates/example web/app
 ```
 
-The pull request that adds the baseline rows needs the
-`crate-tokens-exception` label: ask a reviewer to add it, then close and
-reopen the pull request so the check re-runs with the label. The check's
-failure output prints the same instructions.
+`--ci BASE` checks the committed HEAD against BASE, measuring every head
+unit and additionally the touched grandfathered base units. CI uses the
+merge commit's first parent, not the event's potentially stale base SHA.
+`--range BASE TIP UNIT...` applies the same verdict to explicitly selected
+units in two immutable trees, independent of the index and working tree.
+Its caller must supply the union of old and new owning units, including
+ownership transfers. It reads manifests and source only within those
+units and their ancestor manifests; config policy is checked globally.
 
-It prints a `baseline <unit> <tokens>` row for every unit over the limit,
-at its current count, including units already in `.crate-tokens`, so
-delete existing `baseline` rows first. Add `exempt` lines before running
-it. `--report` lists every unit's count, largest first, with the migration
-tokens left out of each.
-`scripts/check-crate-tokens.sh` is a thin wrapper that runs
-`scripts/check-crate-tokens.py` through uv (downloading it from this
-repository's `master` when piped from curl); run either directly in a clone.
+The engine exports `unit_verdict(count, row=None, *, old_count=None,
+old_row=None, touched=False, exists=True)`, returning `(failures, warnings)`
+as lists of messages, and `check_range(base, tip="HEAD", units=None)`,
+returning `(counts, failures, warnings)`. This is the policy used by both
+release and hook callers. Counts are Claude tokens, not raw tokeniser counts;
+callers must also compare configs to reject additions and raises.
+`--history-needed BASE [TIP]` is a config-only preflight: exit 3 requires
+complete accepted history, exit 0 needs none, other exits are failures.
+
+With no mode the engine measures tracked and untracked, non-ignored working
+files. `--report` lists counts, largest first, and excluded migration tokens.
+`--print-baseline` remains a diagnostic export only, not permission to add
+rows. `scripts/check-crate-tokens.sh` runs the self-contained Python engine
+through uv, downloading it from this repository's `master` only when no
+local engine is available.
 
 ## Commit size
 
@@ -499,8 +525,9 @@ under `$RUNNER_TEMP`, never with a filter, using the job token through an
 environment-only header that is never written to `.git/config`. The commit
 size and no-binaries checks fetch the full history of the merge commit and
 head (fork heads come through the base repository); the file length and
-crate token checks fetch only the merge commit and its parents, two commits
-deep, the path collision check only the merge commit, and the org hooks
+crate token checks initially fetch only the merge commit and its parents,
+two commits deep (crate tokens fetches complete history only for candidate
+allowance additions), the path collision check only the merge commit, and the org hooks
 check only the pull request head, one commit deep. `scripts/fresh-clone.test.sh`
 replays the blob-less workspace failure and fails while a workflow's copy
 differs from the script.
