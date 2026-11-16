@@ -13,25 +13,24 @@
 #   check-crate-tokens.py --report         every unit's count, largest first, and the
 #                                          migration tokens left out of it
 #   check-crate-tokens.py --help           this text
-#   check-crate-tokens.py --print-baseline "baseline <unit> <tokens>" for every unit over
-#                                          the limit
-#   check-crate-tokens.py --ci BASE        the working tree, and .crate-tokens may not add
-#                                          or raise baseline rows or add exempt lines
-#                                          compared with BASE unless
-#                                          CRATE_TOKENS_EXCEPTION=true (the PR label);
-#                                          in a sync, also the default branch tip
-# A sync: CRATE_TOKENS_HEAD_REF is the default branch, CRATE_TOKENS_HEAD_REPO is
-# CRATE_TOKENS_REPO, and in a full clone HEAD has the tip of origin/<default branch> but
-# BASE does not. Its lines passed on the default branch, so they count as old too.
+#   check-crate-tokens.py --print-baseline diagnostic rows only, not permission to add them
+#   check-crate-tokens.py --ci BASE        check BASE against the committed HEAD tree
+#   check-crate-tokens.py --range BASE TIP UNIT...  the same verdict, only selected units
+#   check-crate-tokens.py --history-needed BASE [TIP]  config-only preflight; exit 3 if a
+#                                          candidate addition needs complete history
+# Rows and exemptions may never be added or raised. No label bypasses this policy.
+# A touched grandfathered unit must shrink below its measured base count AND its base row,
+# ratcheting the row to the new count, or removing it at <=50,000. Measured files alone
+# count as touches. Touched units warn at >=45,000. Deleted units must lose their rows.
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
 # Run with: uv run --script scripts/check-crate-tokens.py [mode], or through
-# scripts/check-crate-tokens.sh, which also works piped from curl (see GRANDFATHER).
+# scripts/check-crate-tokens.sh, which also works piped from curl.
 # .crate-tokens lines (# starts a comment):
 #   exempt <glob>              generated or vendored paths; * is one path segment,
 #                              ** any depth, ? one character, the rest literal
 #   baseline <unit> <tokens>   a grandfathered unit ("." for the repository root);
-#                              the unit fails once it grows past its row
+#                              existing allowances only; touch it, split it
 # Each projects/<p>/.crate-tokens adds lines relative to its folder ("." is the folder) and
 # is never counted itself; each config file may only shrink against the same file at BASE.
 # Never counted: lockfiles, *.d.ts, source maps, minified files, snapshots, SVGs,
@@ -72,15 +71,6 @@ PACKAGE_TABLE = re.compile(rb"^[ \t]*\[package\][ \t]*(#.*)?\r?$", re.MULTILINE)
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
-GRANDFATHER = """\
-crate-tokens: to grandfather units that were already over the limit, run this at the
-repository root (it needs uv), then commit .crate-tokens:
-    curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |
-      bash -s -- --print-baseline >> .crate-tokens
-The pull request that adds baseline rows needs the crate-tokens-exception label; after adding
-it, close and reopen the pull request so the check re-runs."""
-
-
 class ConfigError(Exception):
     pass
 
@@ -117,7 +107,7 @@ def parse_config(text, name, prefix=""):
         if w[0] == "exempt" and len(w) == 2:
             exempt.append(prefix + w[1])
         elif w[0] == "baseline" and len(w) == 3 and w[2].isdigit():
-            unit = w[1].rstrip("/") or "."
+            unit = normalise_unit(w[1])
             if prefix:
                 unit = prefix.rstrip("/") if unit == "." else prefix + unit
             if unit in rows:
@@ -128,6 +118,13 @@ def parse_config(text, name, prefix=""):
     if errors:
         raise ConfigError("\n".join(errors))
     return exempt, rows
+
+
+def normalise_unit(unit):
+    value = unit.rstrip("/")
+    if value != "." and (not value or any(p in ("", ".", "..") for p in value.split("/"))):
+        raise ConfigError(f"invalid unit path {unit!r}; use a repository-relative canonical path")
+    return value
 
 
 def prefix_of(name):
@@ -337,6 +334,25 @@ class Tree:
                   and not skipped(p, res))
         return measure(exempt, self.entries, self.read, self.units, selected)
 
+    def touched(self, other, exempt, other_exempt):
+        res, other_res = ([glob_re(g) for g in e] for e in (exempt, other_exempt))
+        candidates = []
+        for p in self.entries.keys() | other.entries.keys():
+            if migration(p):
+                continue
+            if (self.entries.get(p), owner(p, self.units), skipped(p, res)) != (
+                    other.entries.get(p), owner(p, other.units), skipped(p, other_res)):
+                candidates.append(p)
+        self.load(candidates)
+        other.load(candidates)
+        touched = set()
+        for p in candidates:
+            a, b = source_text(p, res, self.read), source_text(p, other_res, other.read)
+            u, v = owner(p, self.units), owner(p, other.units)
+            if (u, a) != (v, b):
+                touched.update(w for w, text in ((u, a), (v, b)) if w is not None and text is not None)
+        return touched | (self.units - other.units)
+
 
 def unit_verdict(count, row=None, *, old_count=None, old_row=None, touched=False, exists=True):
     """Shared pure policy: return (failure messages, warnings), without unit-name prefixes.
@@ -344,14 +360,13 @@ def unit_verdict(count, row=None, *, old_count=None, old_row=None, touched=False
     Callers also compare configs to reject additions/raises even on untouched units."""
     failures, warnings = [], []
     if touched and old_row is not None:
+        if exists and (old_count is None or count >= old_count or count >= old_row):
+            failures.append(f"{count} tokens must be strictly below measured base {old_count} and baseline {old_row}; split it")
         if not exists or count <= LIMIT:
             if row is not None:
                 failures.append("within the limit or deleted; remove its baseline row")
-        else:
-            if old_count is None or count >= old_count or count >= old_row:
-                failures.append(f"{count} tokens must be strictly below measured base {old_count} and baseline {old_row}; split it")
-            if row != count:
-                failures.append(f"ratchet its row to baseline <unit> {count}")
+        elif row != count:
+            failures.append(f"ratchet its row to baseline <unit> {count}")
     if row is not None and count > row:
         failures.append(f"{count} tokens, baseline {row} (grew; split it)")
     elif row is None and count > LIMIT:
@@ -372,64 +387,117 @@ def default_branch():
 
 
 def resolve_base(base):
-    if base.strip("0") and git("cat-file", "-e", f"{base}^{{commit}}", check=False) is not None:
-        return base
-    d = default_branch()
-    mb = git("merge-base", "HEAD", d, check=False) if d else None
-    return mb.decode().strip() if mb else None
+    if base.strip("0"):
+        if git("cat-file", "-e", f"{base}^{{commit}}", check=False) is not None:
+            return base
+    else:
+        d = default_branch()
+        mb = git("merge-base", "HEAD", d, check=False) if d else None
+        if mb:
+            return mb.decode().strip()
+    raise ConfigError("base unavailable; fetch the base/default branch before checking")
 
 
-def sync_tip(base):
-    """The tip of origin/<default branch> in a sync (see the top), else None."""
-    d, env = os.environ.get("CRATE_TOKENS_DEFAULT_BRANCH", ""), os.environ.get
-    if not d or env("CRATE_TOKENS_HEAD_REF", "") != d or not env("CRATE_TOKENS_REPO", "") \
-            or env("CRATE_TOKENS_HEAD_REPO", "") != env("CRATE_TOKENS_REPO"):
-        return None
-    tip = git("rev-parse", "-q", "--verify", f"origin/{d}^{{commit}}", check=False)
-    shallow = git("rev-parse", "--is-shallow-repository", check=False)
-    if not tip or (shallow or b"").strip() != b"false":
-        return None
-    tip = tip.decode().strip()
-    if git("merge-base", "--is-ancestor", tip, "HEAD", check=False) is None:
-        return None
-    if base and git("merge-base", "--is-ancestor", tip, base, check=False) is not None:
-        return None
-    return tip
+def configs_at(ref):
+    entries = {}
+    for rec in git("ls-tree", "-r", "-z", ref, "--", CONFIG, "projects/").split(b"\0"):
+        if rec:
+            meta, path = rec.split(b"\t", 1)
+            entries[path.decode("utf-8", "surrogateescape")] = meta.split()
+    names = config_names(entries)
+    wanted = {p: entries[p][2].decode() for p in names if p in entries}
+    if any(entries[p][0] not in (b"100644", b"100755") for p in wanted):
+        raise ConfigError("config files must be regular files")
+    blobs = batch_blobs(wanted.values())
+    return load_configs(names, lambda p: blobs.get(wanted.get(p)))
 
 
-def old_config(ref, name, pre):
-    """(exempt, rows) of config NAME at commit REF; nothing for no REF or a broken file."""
-    text = git("show", f"{ref}:{name}", check=False) if ref else None
-    try:
-        return parse_config((text or b"").decode(), f"{ref}:{name}", pre)
-    except ConfigError:
-        return [], {}  # a broken old config grandfathers nothing
-
-
-def compare_base(base, per):
-    """(config name, line) for each line a config file added or raised compared with the same
-    file at BASE (in a sync, also at the default branch tip)."""
-    base = resolve_base(base)
-    tip = sync_tip(base)
-    added = []
-    for name, (exempt, rows) in per.items():
+def config_delta(old, new):
+    added, candidates = [], set()
+    for name, (exempt, rows) in new.items():
+        old_exempt, old_rows = old.get(name, ([], {}))
         pre = prefix_of(name)
-        old_exempt, old_rows = old_config(base, name, pre)
-        tip_exempt, tip_rows = old_config(tip, name, pre)
-        old_exempt = old_exempt + tip_exempt
-        for u, n in tip_rows.items():
-            old_rows[u] = max(n, old_rows.get(u, 0))
         added += [(name, f"new exempt line {g[len(pre):]}") for g in exempt if g not in old_exempt]
         for u, n in sorted(rows.items()):
             if u not in old_rows:
+                candidates.add(u)
                 added.append((name, f"new baseline row {u} {n}"))
             elif n > old_rows[u]:
                 added.append((name, f"baseline row {u} raised from {old_rows[u]} to {n}"))
-    return base, added
+    return added, candidates
+
+
+def compare_base(base, per):
+    base = resolve_base(base)
+    return base, config_delta(configs_at(base)[2], per)[0]
+
+
+def historical_units(base):
+    """One accepted-history walk, one blob batch. Never include the PR's new ancestry."""
+    if git("rev-parse", "--is-shallow-repository").strip() != b"false" or git(
+            "config", "--get-regexp", r"^(remote\..*\.(promisor|partialclonefilter)|extensions\.partialclone)$", check=False):
+        raise ConfigError("allowance history incomplete; fetch full base/default history without filters")
+    default = default_branch()
+    if not default:
+        raise ConfigError("default branch unavailable; fetch full base/default history")
+    raw = git("log", "--format=", "--full-history", "-m", "--root", "--raw", "-z",
+              "--no-renames", "--no-abbrev", base, default, "--", CONFIG,
+              ":(glob)projects/*/" + CONFIG).split(b"\0")
+    pairs, i = set(), 0
+    while i < len(raw):
+        meta = raw[i].strip()
+        i += 1
+        if not meta:
+            continue
+        if not meta.startswith(b":") or i == len(raw):
+            raise ConfigError("could not parse accepted config history")
+        path = raw[i].decode("utf-8", "surrogateescape")
+        i += 1
+        if path not in config_names([path]):
+            continue
+        fields = meta[1:].split()
+        for oid in fields[2:4]:
+            if oid.strip(b"0"):
+                pairs.add((oid.decode(), path))
+    blobs, units = batch_blobs(o for o, _ in pairs), set()
+    for oid, path in sorted(pairs):
+        units.update(parse_config(blobs[oid].decode("utf-8"), path, prefix_of(path))[1])
+    return units
+
+
+def check_range(base, tip="HEAD", units=None):
+    """Shared release/hook entry point: (counts, failures, warnings). Units are raw paths.
+    The hook supplies its union of old/new owning units; no unrelated source is measured."""
+    base = resolve_base(base)
+    old_exempt, old_rows, old_per = configs_at(base)
+    exempt, rows, per = configs_at(tip)
+    added, candidates = config_delta(old_per, per)
+    failures = [f"{name}: {message}" for name, message in added]
+    if candidates:
+        try:
+            reused = candidates & historical_units(base)
+            failures += [f"{u}: baseline path appeared in accepted history; allowances cannot be re-added" for u in sorted(reused)]
+        except (ConfigError, UnicodeError, subprocess.CalledProcessError) as err:
+            failures.append(f"allowance history could not be proven: {err}")
+    old, new = Tree(base, units), Tree(tip, units)
+    touched = old.touched(new, old_exempt, exempt)
+    selected = None if units is None else set(units)
+    counts = new.measure(exempt, selected)
+    before = old.measure(old_exempt, touched & set(old_rows))
+    warnings = []
+    for u in sorted(set(counts) | (set(old_rows) & touched)):
+        if selected is not None and u not in selected:
+            continue
+        errors, notes = unit_verdict(counts.get(u, (0,))[0], rows.get(u),
+                                    old_count=before.get(u, (0,))[0], old_row=old_rows.get(u),
+                                    touched=u in touched, exists=u in new.units)
+        failures += [f"{u}: {m}" for m in errors]
+        warnings += [f"{u}: {m}" for m in notes]
+    return counts, failures, warnings
 
 
 def main(argv):
-    for stream in (sys.stdout, sys.stderr):  # non-UTF-8 paths print as escapes, not a crash
+    for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors="backslashreplace")
     mode = argv[0] if argv else "all"
     if mode in ("-h", "--help") and len(argv) == 1:
@@ -438,68 +506,58 @@ def main(argv):
         for line in lines[: next(i for i, x in enumerate(lines) if not x.startswith("#"))]:
             print(line[2:])
         return 0
-    if mode not in ("all", "--report", "--print-baseline", "--ci") or (mode == "--ci") != (len(argv) == 2) \
-            or (mode != "--ci" and len(argv) > 1):
-        print("usage: check-crate-tokens.py [--help | --report | --print-baseline | --ci BASE]", file=sys.stderr)
+    valid = (mode in ("all", "--report", "--print-baseline") and len(argv) <= 1
+             or mode == "--ci" and len(argv) == 2
+             or mode == "--range" and len(argv) >= 4
+             or mode == "--history-needed" and len(argv) in (2, 3))
+    if not valid:
+        print("usage: check-crate-tokens.py [--report | --print-baseline | --ci BASE |"
+              " --range BASE TIP UNIT... | --history-needed BASE [TIP]]", file=sys.stderr)
         return 2
     os.chdir(git("rev-parse", "--show-toplevel").decode().strip())
-    try:
+    if mode == "--history-needed":
+        _, candidates = config_delta(configs_at(resolve_base(argv[1]))[2], configs_at(argv[2] if len(argv) == 3 else "HEAD")[2])
+        print("crate-tokens: complete accepted history " + ("required" if candidates else "not needed"))
+        return 3 if candidates else 0
+    if mode in ("--ci", "--range"):
+        counts, failures, warnings = check_range(argv[1], argv[2] if mode == "--range" else "HEAD",
+                                                {normalise_unit(u) for u in argv[3:]} if mode == "--range" else None)
+    else:
         exempt, rows, per = load_configs(config_names())
-    except ConfigError as e:
-        stream = sys.stderr if mode == "--print-baseline" else sys.stdout
-        print("\n".join(f"[FAIL] {m}" for m in str(e).splitlines()), file=stream)
-        return 1
-    counts = measure(exempt)
-    if mode == "--report":
-        print(f"{'tokens':>8} {'files':>6} {'migrations':>10}  unit")
-        for u, (n, f, m) in sorted(counts.items(), key=lambda kv: (-kv[1][0], kv[0])):
-            print(f"{n:>8} {f:>6} {m:>10}  {escape(u)}")
-        return 0
-    if mode == "--print-baseline":
+        counts = measure(exempt)
+        failures, warnings = [], []
+        if mode == "--report":
+            print(f"{'tokens':>8} {'files':>6} {'migrations':>10}  unit")
+            for u, (n, f, m) in sorted(counts.items(), key=lambda kv: (-kv[1][0], kv[0])):
+                print(f"{n:>8} {f:>6} {m:>10}  {escape(u)}")
+            return 0
+        if mode == "--print-baseline":
+            for u in sorted(counts):
+                if counts[u][0] > LIMIT:
+                    print(f"baseline {escape(u)} {counts[u][0]}")
+            return 0
+        src = {u: name for name, (_, r) in per.items() for u in r}
         for u in sorted(counts):
-            if counts[u][0] > LIMIT:
-                print(f"baseline {u} {counts[u][0]}")
-        return 0
-    src = {u: name for name, (_, r) in per.items() for u in r}
-    bad = 0
-    for unit in sorted(counts):
-        n, u = counts[unit][0], escape(unit)
-        if unit in rows:
-            row = rows[unit]
-
-            if n > row:
-                print(f"[FAIL] {u}: {n} tokens, baseline {row} (grew; shrink it to {row} or fewer, or split it)")
-                bad += 1
-            elif n <= LIMIT:
-                print(f"note: {u}: {n} tokens is within the limit {LIMIT}; delete its {src[unit]} row")
-            elif n < row:
-                print(f"note: {u}: shrank to {n} tokens; lower its row to \"baseline {u} {n}\"")
-        elif n > LIMIT:
-            print(f"[FAIL] {u}: {n} tokens, limit {LIMIT} (split it)")
-            bad += 1
-    for u in sorted(set(rows) - set(counts)):
-        print(f"note: {src[u]} row for {u} matches no unit; delete it")
-    if mode == "--ci":
-        base, added = compare_base(argv[1], per)
-        allowed = os.environ.get("CRATE_TOKENS_EXCEPTION") == "true"
-        for name, a in added:
-            if allowed:
-                print(f"crate-tokens: allowed by the crate-tokens-exception label: {a}")
-            else:
-                print(f"[FAIL] {name}: {a}")
-                bad += 1
-        if added and not allowed:
-            print(f"crate-tokens: {CONFIG} may only shrink (compared with {base or 'nothing'}). A reviewer"
-                  " allows a new or raised line by adding the crate-tokens-exception label to the pull"
-                  " request, then closing and reopening it.")
-    if bad:
-        print(f"crate-tokens: {bad} failure(s); limit {LIMIT} Claude tokens (o200k_base x 1.5) per"
-              " unit; see --report")
-        print(GRANDFATHER)
+            n = counts[u][0]
+            failures += [f"{u}: {m}" for m in unit_verdict(n, rows.get(u))[0]]
+            if u in rows and n < rows[u]:
+                action = f"delete its {src[u]} row" if n <= LIMIT else f'lower its row to "baseline {u} {n}"'
+                print("note: " + escape(f"{u}: {n} tokens; {action}"))
+        for u in sorted(set(rows) - set(counts)):
+            print("note: " + escape(f"{src[u]} row for {u} matches no unit; delete it"))
+    for tag, messages in (("WARN", warnings), ("FAIL", failures)):
+        for message in messages:
+            print(f"[{tag}] {escape(message)}")
+    if failures:
+        print(f"crate-tokens: {len(failures)} failure(s); limit {LIMIT} Claude tokens per unit; split it, see --report")
         return 1
     print(f"crate-tokens: {len(counts)} unit(s) checked, each within its budget")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (ConfigError, UnicodeError, subprocess.CalledProcessError) as err:
+        print(f"[FAIL] crate-tokens: {escape(str(err))}", file=sys.stderr)
+        sys.exit(1 if isinstance(err, ConfigError) else 2)
