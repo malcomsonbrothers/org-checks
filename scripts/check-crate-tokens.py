@@ -19,9 +19,10 @@
 #   check-crate-tokens.py --history-needed BASE [TIP]  config-only preflight; exit 3 if a
 #                                          candidate addition needs complete history
 # Rows and exemptions may never be added or raised. No label bypasses this policy.
-# A touched grandfathered unit must shrink below its measured base count AND its base row,
-# ratcheting the row to the new count, or removing it at <=50,000. Measured files alone
-# count as touches. Touched units warn at >=45,000. Deleted units must lose their rows.
+# Above 50,000, a touched grandfathered unit must shrink below its measured base count AND
+# its base row, ratcheting the row to the new count. At <=50,000, just remove its row.
+# Measured files alone count as touches. Touched units warn at >=45,000.
+# Deleted units must lose their rows.
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
 # Run with: uv run --script scripts/check-crate-tokens.py [mode], or through
@@ -369,13 +370,15 @@ def unit_verdict(count, row=None, *, old_count=None, old_row=None, touched=False
     Callers also compare configs to reject additions/raises even on untouched units."""
     failures, warnings = [], []
     if touched and old_row is not None:
-        if exists and (old_count is None or count >= old_count or count >= old_row):
-            failures.append(f"{count} tokens must be strictly below measured base {old_count} and baseline {old_row}; split it")
         if not exists or count <= LIMIT:
             if row is not None:
-                failures.append("within the limit or deleted; remove its baseline row")
-        elif row != count:
-            failures.append(f"ratchet its row to baseline <unit> {count}")
+                failures.append("under the limit: delete its row" if exists else
+                                "within the limit or deleted; remove its baseline row")
+        else:
+            if old_count is None or count >= old_count or count >= old_row:
+                failures.append(f"{count} tokens must be strictly below measured base {old_count} and baseline {old_row}; split it")
+            if row != count:
+                failures.append(f"ratchet its row to baseline <unit> {count}")
     if row is not None and count > row:
         failures.append(f"{count} tokens, baseline {row} (grew; split it)")
     elif row is None and count > LIMIT:

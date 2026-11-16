@@ -171,12 +171,12 @@ never add an allowance. Moving a row between config files is an addition.
 Config files themselves are excluded from measurement.
 
 **Touch it, split it.** For every unit with a row on the current base whose
-measured source changes, the new count must be strictly below both its
-measured base count and its base row. Above 50,000, ratchet the row to the
-exact new count. At or below 50,000, remove the row. A deleted unit must
-lose its row. Lockfile-only, migration-only and exempt/generated-only
-changes are not touches. Mode-only changes to measured files are touches.
-Ownership changes are checked in both trees, so
+measured source changes, a new count above 50,000 must be strictly below
+both its measured base count and its base row, with the row ratcheted to
+the exact new count. At or below 50,000, remove the row; no further shrinkage
+is required. A deleted unit must lose its row. Lockfile-only, migration-only
+and exempt/generated-only changes are not touches. Mode-only changes to
+measured files are touches. Ownership changes are checked in both trees, so
 moving source between units does not hide a touch. Untouched grandfathered
 units still pass within their existing budget. Touched units at or above
 45,000 print `[WARN]`; warnings alone exit successfully.

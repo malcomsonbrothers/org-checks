@@ -119,7 +119,25 @@ cfg "baseline big $n" "baseline big $n"; check; expect "duplicate rows fail" 1 '
 cfg 'baselines big 1'; check; expect "unknown directive fails" 1 'unknown or malformed line'
 cfg 'baseline big many'; check; expect "non-numeric row fails" 1 'unknown or malformed line'
 big big/src/lib.rs 3000; cfg "baseline big $n"; save retirement
-check --ci HEAD~1; expect "touched healthy unit must retire its row" 1 'within the limit or deleted; remove its baseline row'
+check --ci HEAD~1; expect "touched healthy unit must retire its row" 1 'under the limit: delete its row'
+chmod +x big/src/lib.rs; save unchanged
+check --ci HEAD~1; expect "unchanged healthy count still requires row removal" 1 'under the limit: delete its row'
+cfg; chmod -x big/src/lib.rs; save retire
+check --ci HEAD~1; expect "unchanged healthy count passes once its row is removed" 0
+
+# Exercise the inclusive limit and non-shrinking healthy counts through the shared policy.
+run uv run --no-config python -B - "$here/scripts/check-crate-tokens.py" <<'PY'
+import runpy
+import sys
+verdict = runpy.run_path(sys.argv[1])["unit_verdict"]
+for count in (0, 18815, 50000):
+    for old_count in (None, count - 1, count, count + 1):
+        args = dict(old_count=old_count, old_row=55956, touched=True)
+        assert verdict(count, **args)[0] == [], (count, args)
+        assert verdict(count, 55956, **args)[0] == ["under the limit: delete its row"]
+assert verdict(50001, 50001, old_count=50001, old_row=55956, touched=True)[0]
+PY
+expect "healthy policy accepts removed rows at or below the limit without shrinkage" 0
 
 # --ci: allowances may only shrink against the base; labels never bypass policy.
 repo ci; crate big; big big/src/lib.rs; save
