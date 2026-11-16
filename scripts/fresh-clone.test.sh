@@ -92,8 +92,14 @@ for name in commit-size file-lengths crate-tokens path-collisions no-binaries or
   wf="$here/.github/workflows/$name.yml"
   run grep -n -E '^ *(- )?uses: actions/checkout|^ *(filter|fetch-depth):' "$wf"; expect "$name: no actions/checkout or filter" 1
   # shellcheck disable=SC2016 # literal expressions in the workflow
-  run grep -c -E '^        working-directory: \$\{\{ runner\.temp \}\}/pr$|FRESH_CLONE_TOKEN: \$\{\{ github\.token \}\}$|"\$clone" "\$RUNNER_TEMP/pr" "\$GITHUB_SERVER_URL/\$GITHUB_REPOSITORY"' "$wf"
-  expect "$name: fresh clone with the job token, check runs in it" 0 '^3$'
+  # Require each behaviour, not a total count: history preflights also need the job token.
+  run awk '
+    /^        working-directory: \$\{\{ runner\.temp \}\}\/pr$/ { directory = 1 }
+    /FRESH_CLONE_TOKEN: \$\{\{ github\.token \}\}$/ { token = 1 }
+    /"\$clone" "\$RUNNER_TEMP\/pr" "\$GITHUB_SERVER_URL\/\$GITHUB_REPOSITORY"/ { clone = 1 }
+    END { exit !(directory && token && clone) }
+  ' "$wf"
+  expect "$name: fresh clone with the job token, check runs in it" 0
   run awk '/<<.CLONE.$/ { on = 1; next } /^ *CLONE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
   [ "$out" = "$(cat "$clone")" ] && rc=0 || rc=1
   expect "$name: workflow copy matches scripts/fresh-clone.sh (re-embed it)" 0
