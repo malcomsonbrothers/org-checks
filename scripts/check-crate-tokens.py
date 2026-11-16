@@ -131,12 +131,17 @@ def prefix_of(name):
     return name[: -len(CONFIG)]
 
 
+def tree_config_names(paths):
+    """Immutable config enumeration, independent of working-tree adapter overrides."""
+    return [CONFIG] + sorted(p for p in paths if p.count("/") == 2
+                            and p.startswith("projects/") and p.endswith("/" + CONFIG)
+                            and PROJECT.fullmatch(p.split("/")[1]))
+
+
 def config_names(paths=None):
-    """Root and project configs, in a tree or the working directory."""
+    """Root and project configs; adapters may replace this with a zero-argument callable."""
     if paths is not None:
-        return [CONFIG] + sorted(p for p in paths if p.count("/") == 2
-                                and p.startswith("projects/") and p.endswith("/" + CONFIG)
-                                and PROJECT.fullmatch(p.split("/")[1]))
+        return tree_config_names(paths)
     names = [CONFIG]
     if os.path.isdir("projects"):
         names += sorted(f"projects/{d}/{CONFIG}" for d in os.listdir("projects")
@@ -254,7 +259,8 @@ def source_text(path, exempt_res, reader):
         return None
 
 
-def measure(exempt, paths=None, reader=None, units=None, selected=None):
+def measure(exempt, paths=None, reader=None, units=None, selected=None, *, raw_keys=False):
+    """Legacy escaped unit keys by default; immutable policy callers request raw identities."""
     reader = reader or read
     if paths is None:
         out = git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
@@ -280,7 +286,7 @@ def measure(exempt, paths=None, reader=None, units=None, selected=None):
         for u, k, toks in zip(owners, kinds, enc.encode_ordinary_batch(texts, num_threads=1)):
             counts[u][k] += len(toks)
             counts[u][1] += not k
-    return {u: ((raw * 3 + 1) // 2, files, (mig * 3 + 1) // 2)
+    return {(u if raw_keys else escape(u)): ((raw * 3 + 1) // 2, files, (mig * 3 + 1) // 2)
             for u, (raw, files, mig) in counts.items()}
 
 
@@ -335,7 +341,7 @@ class Tree:
         res = [glob_re(g) for g in exempt]
         self.load(p for p in self.entries if (selected is None or owner(p, self.units) in selected)
                   and not skipped(p, res))
-        return measure(exempt, self.entries, self.read, self.units, selected)
+        return measure(exempt, self.entries, self.read, self.units, selected, raw_keys=True)
 
     def touched(self, other, exempt, other_exempt):
         res, other_res = ([glob_re(g) for g in e] for e in (exempt, other_exempt))
@@ -407,7 +413,7 @@ def configs_at(ref):
         if rec:
             meta, path = rec.split(b"\t", 1)
             entries[path.decode("utf-8", "surrogateescape")] = meta.split()
-    names = config_names(entries)
+    names = tree_config_names(entries)
     wanted = {p: entries[p][2].decode() for p in names if p in entries}
     if any(entries[p][0] not in (b"100644", b"100755") for p in wanted):
         raise ConfigError("config files must be regular files")
@@ -456,7 +462,7 @@ def historical_units(base):
             raise ConfigError("could not parse accepted config history")
         path = raw[i].decode("utf-8", "surrogateescape")
         i += 1
-        if path not in config_names([path]):
+        if path not in tree_config_names([path]):
             continue
         fields = meta[1:].split()
         for oid in fields[2:4]:

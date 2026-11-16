@@ -213,9 +213,17 @@ units and their ancestor manifests; config policy is checked globally.
 The engine exports `unit_verdict(count, row=None, *, old_count=None,
 old_row=None, touched=False, exists=True)`, returning `(failures, warnings)`
 as lists of messages, and `check_range(base, tip="HEAD", units=None)`,
-returning `(counts, failures, warnings)`. This is the policy used by both
-release and hook callers. Counts are Claude tokens, not raw tokeniser counts;
-callers must also compare configs to reject additions and raises.
+returning `(counts, failures, warnings)`, with raw unit paths as count keys.
+This is the policy used by both release and hook callers. Counts are Claude
+tokens, not raw tokeniser counts; callers must also compare configs to reject
+additions and raises.
+
+Legacy staged adapters can still override `config_names` with a zero-argument
+callable. Immutable config enumeration does not use that override. `measure`
+keeps control characters escaped in its keys by default, as those adapters
+expect; `measure(..., raw_keys=True)` preserves raw identities for immutable
+range checks, including paths that look like escaped names.
+
 `--history-needed BASE [TIP]` is a config-only preflight: exit 3 requires
 complete accepted history, exit 0 needs none, other exits are failures.
 
