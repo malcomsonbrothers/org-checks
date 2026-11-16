@@ -209,8 +209,12 @@ expect "workflow: pull_request trigger, --ci against the base" 0
 # shellcheck disable=SC2016 # literal expressions in the workflow
 run grep -c -E -- '--history-needed "\$CURRENT_BASE"|fresh-clone.sh" "\$RUNNER_TEMP/pr-history"' "$wf"
 expect "workflow: config-only preflight gates complete history" 0 '^2$'
-run grep -n -E 'runs-on:' "$wf"; [ "$out" = "$(grep -n -x -F '    runs-on: ubuntu-latest' "$wf")" ] && rc=0 || rc=1
-expect "one isolated GitHub-hosted runner" 0
+hybrid=$(cat <<'RUNNER'
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+RUNNER
+)
+run grep -n -E 'runs-on:' "$wf"; [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
+expect "one hybrid runner: self-hosted only for private and internal repositories" 0
 run grep -n -E 'uses: [^ ]*@[^ ]*$' "$wf"; expect "every action is pinned with a version comment" 1
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
 [ "$out" = "$(cat "$here/scripts/check-crate-tokens.py")" ] && rc=0 || rc=1
