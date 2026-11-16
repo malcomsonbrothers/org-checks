@@ -127,7 +127,8 @@ n=$(tokens big)
 cfg "baseline big $n"; save rows
 check --ci HEAD~1; expect "new row fails in CI" 1 "^\[FAIL\] .crate-tokens: new baseline row big $n$"
 CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the old label cannot allow a new row" 1 'new baseline row big'
-check --range HEAD HEAD big; expect "unchanged rows pass in the shared range CLI" 0
+chmod +x big/src/lib.rs; save mode
+check --range HEAD~1 HEAD big; expect "mode-only changes to measured files trigger shrink" 1 'strictly below measured base'
 cfg "baseline big $((n + 9))"; save raise
 check --ci HEAD~1; expect "raised row fails" 1 "baseline row big raised from $n to $((n + 9))"
 cfg "baseline big $n" 'exempt big/gen/**'; save exempt
