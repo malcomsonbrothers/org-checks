@@ -317,7 +317,8 @@ class Tree:
             meta, path = rec.split(b"\t", 1)
             mode, kind, oid = meta.split()
             self.entries[path.decode("utf-8", "surrogateescape")] = oid.decode() if kind == b"blob" and mode != b"120000" else None
-        self.load(p for p in self.entries if p.rsplit("/", 1)[-1] in ("Cargo.toml", "package.json"))
+        self.load(p for p in self.entries if p.rsplit("/", 1)[-1] in ("Cargo.toml", "package.json")
+                  and not any(d in SKIP_DIRS for d in p.split("/")[:-1]))
         self.units = discover(self.entries, self.read)
 
     def load(self, paths):
@@ -338,7 +339,7 @@ class Tree:
         res, other_res = ([glob_re(g) for g in e] for e in (exempt, other_exempt))
         candidates = []
         for p in self.entries.keys() | other.entries.keys():
-            if migration(p):
+            if migration(p) or (skipped(p, res) and skipped(p, other_res)):
                 continue
             if (self.entries.get(p), owner(p, self.units), skipped(p, res)) != (
                     other.entries.get(p), owner(p, other.units), skipped(p, other_res)):

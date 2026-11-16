@@ -12,12 +12,10 @@
 # and grandfathered baseline rows. A missing .crate-tokens never skips the
 # check. It always enforces: any violation fails the job.
 #
-# .crate-tokens may only shrink against the pull request base: new or raised
-# baseline rows and new exempt lines fail unless the pull request has the
-# crate-tokens-exception label (then close and reopen the pull request to re-run).
-# In a sync (this repository's own default branch into a base that lacks its
-# tip, as for file-lengths.yml), lines the default branch tip already has also
-# count as old: they passed there.
+# No new or raised allowance is permitted, even in a sync. Touched grandfathered
+# units must strictly shrink against their measured base count and row, ratcheting
+# the row or retiring it at <=50,000. Candidate rows require complete accepted
+# base/default history; ordinary pull requests keep a depth-2 clone.
 #
 # The engine below is scripts/check-crate-tokens.py, embedded so the job
 # fetches no code from this repository: the ruleset's pinned commit pins the
@@ -31,19 +29,14 @@ name: Crate Tokens
 
 on:
   pull_request:
-    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
-    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
-    # changing the crate-tokens-exception label, re-run the failed check: it reads the labels live.
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
 
 jobs:
   crate-tokens:
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # A new clone in the job's temporary directory, never the runner's reused workspace
@@ -52,9 +45,6 @@ jobs:
         env:
           FRESH_CLONE_TOKEN: ${{ github.token }}
           PR_MERGE: ${{ github.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           clone="$RUNNER_TEMP/fresh-clone.sh"
@@ -120,13 +110,9 @@ jobs:
           echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
           CLONE
           chmod +x "$clone"
-          # The engine reads the pull request's merge commit (what actions/checkout gave it), and the
-          # config files of its first parent (the base) and of the default branch, never with a filter.
-          # Two commits of each are enough (the merge and its parents), except for a possible sync (this
-          # repository's default branch into another branch), where the engine needs full history; it
-          # treats a shallow clone as no sync.
+          # Two commits include the merge and its parents. Only a candidate allowance
+          # triggers a second, complete clone in the config-only preflight below.
           depth=(--depth 2)
-          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REF" = "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then depth=(); fi
           "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" \
             "+$PR_MERGE:refs/check/merge" \
             "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
@@ -161,29 +147,16 @@ jobs:
         with:
           version: "0.13.0"
 
-      # The label as it is now, read through the API, not from the event: gh pr create --label adds
-      # labels just after the opened event, and a re-run replays the original event.
-      - name: Read the crate-tokens-exception label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
-          if grep -qxF 'crate-tokens-exception' <<<"$labels"; then value=true; else value=false; fi
-          echo "CRATE_TOKENS_EXCEPTION=$value" >> "$GITHUB_ENV"
-          echo "crate-tokens-exception label on the pull request: $value"
-
       - name: Check crate and package token budgets
         working-directory: ${{ runner.temp }}/pr
         env:
           CRATE_TOKENS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          CRATE_TOKENS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CRATE_TOKENS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          CRATE_TOKENS_REPO: ${{ github.repository }}
+          FRESH_CLONE_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HISTORY_MERGE: ${{ github.sha }}
           TIKTOKEN_CACHE_DIR: ${{ runner.tool_cache }}/tiktoken
         run: |
+          set -euo pipefail
           engine="$RUNNER_TEMP/check-crate-tokens.py"
           cat > "$engine" <<'ENGINE'
           # /// script
@@ -505,7 +478,8 @@ jobs:
                       meta, path = rec.split(b"\t", 1)
                       mode, kind, oid = meta.split()
                       self.entries[path.decode("utf-8", "surrogateescape")] = oid.decode() if kind == b"blob" and mode != b"120000" else None
-                  self.load(p for p in self.entries if p.rsplit("/", 1)[-1] in ("Cargo.toml", "package.json"))
+                  self.load(p for p in self.entries if p.rsplit("/", 1)[-1] in ("Cargo.toml", "package.json")
+                            and not any(d in SKIP_DIRS for d in p.split("/")[:-1]))
                   self.units = discover(self.entries, self.read)
 
               def load(self, paths):
@@ -526,7 +500,7 @@ jobs:
                   res, other_res = ([glob_re(g) for g in e] for e in (exempt, other_exempt))
                   candidates = []
                   for p in self.entries.keys() | other.entries.keys():
-                      if migration(p):
+                      if migration(p) or (skipped(p, res) and skipped(p, other_res)):
                           continue
                       if (self.entries.get(p), owner(p, self.units), skipped(p, res)) != (
                               other.entries.get(p), owner(p, other.units), skipped(p, other_res)):
@@ -750,6 +724,18 @@ jobs:
                   print(f"[FAIL] crate-tokens: {escape(str(err))}", file=sys.stderr)
                   sys.exit(1 if isinstance(err, ConfigError) else 2)
           ENGINE
+          # Config-only preflight does not load the tokeniser or source. The fresh-clone
+          # helper authenticates only its fetch, through an environment-only header.
+          preflight=0
+          uv run --no-config --quiet --script "$engine" --history-needed "$CURRENT_BASE" || preflight=$?
+          if [ "$preflight" -eq 3 ]; then
+            "$RUNNER_TEMP/fresh-clone.sh" "$RUNNER_TEMP/pr-history" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --checkout "$HISTORY_MERGE" \
+              "+$HISTORY_MERGE:refs/check/merge" \
+              "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+            cd "$RUNNER_TEMP/pr-history" || exit 2
+          elif [ "$preflight" -ne 0 ]; then
+            exit "$preflight"
+          fi
           for attempt in 1 2; do
             status=0
             out=$(uv run --no-config --quiet --script "$engine" --ci "$CURRENT_BASE" 2>&1) || status=$?
@@ -764,14 +750,9 @@ jobs:
           {
             echo "## Crate tokens"
             if [ "$status" -eq 0 ]; then echo "Every crate and package is within its budget."; else
-              echo "Violations (exit $status). For units that were already over the limit, run this at the"
-              echo "repository root (it needs uv), commit .crate-tokens and label the pull request"
-              echo "crate-tokens-exception, then close and reopen the pull request to re-run this check"
-              echo "(see the malcomsonbrothers/org-checks README):"
-              echo
-              echo '    curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-crate-tokens.sh |'
-              echo '      bash -s -- --print-baseline >> .crate-tokens'
-              echo
+              echo "Violations (exit $status). Split oversized units. New or raised allowances are never permitted."
+              echo "Touched grandfathered units must strictly shrink and ratchet or remove their rows."
+              echo "See the malcomsonbrothers/org-checks README for the shared range command."
             fi
             echo '```'
             printf '%s\n' "$out"

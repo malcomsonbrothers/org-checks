@@ -12,7 +12,7 @@ unset CRATE_TOKENS_EXCEPTION CRATE_TOKENS_DEFAULT_BRANCH CRATE_TOKENS_HEAD_REF C
 passed=0 failed=0
 
 repo() { # fresh repo on master with one commit
-  cd "$work" && rm -rf "$1" && git init -q -b master "$1" && cd "$1"
+  cd "$work" && rm -rf "${work:?}/$1" && git init -q -b master "$1" && cd "$1"
   printf 'x\n' > README.md && save init
 }
 crate() { mkdir -p "$1" && printf '[package]\nname = "%s"\n' "${1##*/}" > "$1/Cargo.toml"; }
@@ -20,7 +20,7 @@ pkg() { mkdir -p "$1" && printf '{ "name": "%s" }\n' "${1##*/}" > "$1/package.js
 big() { mkdir -p "$(dirname "$1")" && seq 1 "${2:-40000}" > "$1"; } # well over 50k tokens
 small() { mkdir -p "$(dirname "$1")" && printf 'fn main() {}\n' > "$1"; }
 cfg() { printf '%s\n' "$@" > .crate-tokens; }
-save() { git add -A && git commit -q --no-verify -m "${1:-c}"; }
+save() { git add -A && git commit -q -m "${1:-c}"; }
 run() { out=$("$@" 2>&1) && rc=0 || rc=$?; }
 check() { run uv run --no-config --quiet --script "$here/scripts/check-crate-tokens.py" "$@"; }
 units() { check --report; printf '%s\n' "$out" | awk 'NR > 1 { print $4 }' | sort | tr '\n' ' '; }
@@ -110,7 +110,7 @@ check --help; expect "help documents the rule" 0 'named exactly "migrations" or 
 repo baseline; crate big; big big/src/lib.rs; save
 check; expect "over the limit without a row" 1 'big: [0-9]* tokens, limit 50000'
 n=$(tokens big)
-cfg "baseline big $n"; check; expect "row holds at the count" 0
+cfg "baseline big $n"; check; expect "row holds at the count" 0; save accepted
 cfg "baseline big/ $n"; check; expect "trailing slash is the same unit" 0
 cfg "baseline big $((n - 1))"; check; expect "grew past the row" 1 "big: $n tokens, baseline $((n - 1)) (grew"
 cfg "baseline big $((n + 5))"; check; expect "shrank: a note, not a failure" 0 "lower its row to \"baseline big $n\""
@@ -118,23 +118,23 @@ cfg "baseline big $n" "baseline gone 60000"; check; expect "stale row: a note" 0
 cfg "baseline big $n" "baseline big $n"; check; expect "duplicate rows fail" 1 'duplicate baseline row for big'
 cfg 'baselines big 1'; check; expect "unknown directive fails" 1 'unknown or malformed line'
 cfg 'baseline big many'; check; expect "non-numeric row fails" 1 'unknown or malformed line'
-big big/src/lib.rs 3000; cfg "baseline big $n"; check; expect "within the limit: a note" 0 'delete its .crate-tokens row'
+big big/src/lib.rs 3000; cfg "baseline big $n"; save retirement
+check --ci HEAD~1; expect "touched healthy unit must retire its row" 1 'within the limit or deleted; remove its baseline row'
 
-# --ci: .crate-tokens may only shrink against the base, unless the label allows it.
+# --ci: allowances may only shrink against the base; labels never bypass policy.
 repo ci; crate big; big big/src/lib.rs; save
 n=$(tokens big)
 cfg "baseline big $n"; save rows
 check --ci HEAD~1; expect "new row fails in CI" 1 "^\[FAIL\] .crate-tokens: new baseline row big $n$"
-printf '%s\n' "$out" | grep -q 'crate-tokens-exception label' || expect "failure names the label" x
-CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a new row" 0 'allowed by the crate-tokens-exception label'
-check --ci HEAD; expect "unchanged rows pass" 0
+CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the old label cannot allow a new row" 1 'new baseline row big'
+check --range HEAD HEAD big; expect "unchanged rows pass in the shared range CLI" 0
 cfg "baseline big $((n + 9))"; save raise
 check --ci HEAD~1; expect "raised row fails" 1 "baseline row big raised from $n to $((n + 9))"
 cfg "baseline big $n" 'exempt big/gen/**'; save exempt
 check --ci HEAD~1; expect "new exempt line fails" 1 'new exempt line big/gen/\*\*'
-cfg "baseline big $n"; save drop
-check --ci HEAD~1; expect "dropping an exempt line passes" 0
-check --ci 0000000000000000000000000000000000000000; expect "zero base, no default branch" 1 'new baseline row'
+big big/src/lib.rs 39000; shrunk=$(tokens big); cfg "baseline big $shrunk"; save drop
+check --ci HEAD~1; expect "dropping an exempt line and ratcheting a touched unit passes" 0
+check --ci 0000000000000000000000000000000000000000; expect "zero base, no default branch" 1 'base unavailable'
 git branch -q base HEAD~1; CRATE_TOKENS_DEFAULT_BRANCH=base check --ci 0000000000000000000000000000000000000000
 expect "zero base falls back to the default branch" 0
 git rm -q .crate-tokens; save
@@ -151,23 +151,22 @@ pcfg b "baseline . $nb"; save cfgs; check; expect "every folder's config is read
 cfg "baseline projects/b $nb"; check; expect "a unit in two files is a duplicate" 1 'projects/b/.crate-tokens: duplicate baseline row for projects/b'
 rm .crate-tokens projects/b/.crate-tokens; pcfg a 'exempt **'; mkdir -p other; printf 'exempt **\n' | tee other/.crate-tokens > projects/b/src/.crate-tokens
 check; expect "a folder glob stops at its folder, deeper files are not configs" 1 '^\[FAIL\] projects/b:'
-git checkout -q -- projects && rm -rf other projects/b/src/.crate-tokens
+git checkout -q -- projects && rm -rf "$PWD/other" "$PWD/projects/b/src/.crate-tokens"
 pcfg a "baseline . $na" "baseline core $nc" "baseline gone 60000"; check; expect "notes name the folder file" 0 'projects/a/.crate-tokens row for projects/a/gone matches no unit'
 pcfg a "baseline . $na" "baseline core $nc" 'exempt gen/**'; save
 check --ci HEAD~1; expect "each folder file may only shrink" 1 '^\[FAIL\] projects/a/.crate-tokens: new exempt line gen/\*\*$'
-CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a folder line" 0 'label: new exempt line gen/\*\*$'
+CRATE_TOKENS_EXCEPTION=true check --ci HEAD~1; expect "the old label cannot allow a folder line" 1 'new exempt line gen/\*\*$'
 pcfg a "baseline . $((na + 5))" "baseline core $nc"; save
 check --ci HEAD~1; expect "a raised folder row" 1 "^\[FAIL\] projects/a/.crate-tokens: baseline row projects/a raised from $na to $((na + 5))$"
 pcfg a "baseline core $nc"; cfg "baseline projects/a $na"; save
 check --ci HEAD~1; expect "moving a row to the root is new there" 1 "^\[FAIL\] .crate-tokens: new baseline row projects/a $na$"
 
-# A sync (head ref is the default branch in this repository, HEAD has the tip of origin/<default>,
-# BASE does not) takes the tip's lines as old; any other pull request compares with BASE only.
+# Syncs cannot add or raise allowances either, even when accepted on the default branch.
 repo sync; crate a; small a/src/lib.rs; cfg 'baseline a 60000'; save; git branch staging
 export CRATE_TOKENS_DEFAULT_BRANCH=master CRATE_TOKENS_REPO=o/r
 cfg 'baseline a 65000' 'exempt data/**'; save; git update-ref refs/remotes/origin/master HEAD
 git checkout -q staging; small b.rs; save; git merge -q --no-edit master
-CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1; expect "a sync takes the default branch's lines" 0
+CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1; expect "a sync cannot raise a row" 1 'raised from 60000 to 65000$'
 CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=fork/r check --ci HEAD^1; expect "a fork's default branch is no sync" 1 'new exempt line data/\*\*$'
 CRATE_TOKENS_HEAD_REF=feat CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1
 expect "a feature branch that merged the default branch tip gets no lines from it" 1 'raised from 60000 to 65000$'
@@ -183,15 +182,15 @@ unset CRATE_TOKENS_DEFAULT_BRANCH CRATE_TOKENS_REPO CRATE_TOKENS_HEAD_REF CRATE_
 repo dotdir; crate projects/.hid; big projects/.hid/src/lib.rs; save; n=$(tokens projects/.hid)
 pcfg .hid "baseline . $n"; check; expect "a dot-folder config is not read" 1 '^\[FAIL\] projects/.hid: '
 
-# --print-baseline prints a row for every unit over the limit at its count; appending them passes.
+# --print-baseline is a diagnostic export, not an invitation to add allowances in CI.
 repo adopt; crate a; big a/src/lib.rs; pkg web; big web/src/app.ts; crate ok; small ok/src/lib.rs; save
 check --print-baseline; expect "print-baseline exits 0" 0
 same "print-baseline rows" "$(printf '%s\n' "$out" | awk '{ print $1, $2 }' | tr '\n' ' ')" "baseline a baseline web "
 uv run --no-config --quiet --script "$here/scripts/check-crate-tokens.py" --print-baseline >> .crate-tokens
 check; expect "appending the rows makes the tree pass" 0
 git rm -q --cached .crate-tokens >/dev/null 2>&1 || :; rm .crate-tokens
-check; expect "failure output names the one-liner" 1 'scripts/check-crate-tokens.sh |$'
-printf '%s\n' "$out" | grep -q 'needs the crate-tokens-exception label' || expect "failure output names the label" x
+check; expect "failure output says to split" 1 'split it, see --report$'
+printf '%s\n' "$out" | grep -q 'crate-tokens-exception\|grandfather' && expect "failure must not advise allowances" x
 run env CRATE_TOKENS_ENGINE="$here/scripts/check-crate-tokens.py" bash -s -- --print-baseline \
   < "$here/scripts/check-crate-tokens.sh"
 expect "the wrapper works piped into bash" 0 '^baseline a [0-9]*$'
@@ -200,23 +199,17 @@ cfg 'nonsense'; check --print-baseline; expect "config errors fail print-baselin
 cfg; check --report; expect "report lists units" 0 '^  tokens  files migrations  unit$'
 check --bogus; expect "unknown mode" 2 usage
 
-# The runner every required check uses: the light self-hosted pool on metal-02 only for
-# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
-hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
-RUNNER
-)
-
-# The workflow runs on pull requests, on that runner, and embeds this exact engine.
+# The workflow runs on pull requests, with isolated credentials, and embeds this exact engine.
 wf="$here/.github/workflows/crate-tokens.yml"
+# shellcheck disable=SC2016 # literal shell expressions in the workflow
 run grep -n -E '^  pull_request:$|--ci "\$CURRENT_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "workflow: pull_request trigger, --ci against the base" 0
 # shellcheck disable=SC2016 # literal expressions in the workflow
-run grep -c -E 'CRATE_TOKENS_HEAD_REF: .*head\.ref }}$|CRATE_TOKENS_HEAD_REPO: .*head\.repo\.full_name }}$|CRATE_TOKENS_REPO: .*github\.repository }}$|"\+refs/heads/\$DEFAULT_BRANCH:refs/remotes/origin/\$DEFAULT_BRANCH"$' "$wf"
-expect "workflow: the engine can tell a sync and has the default branch tip" 0 '^4$'
-run grep -n -E 'runs-on:' "$wf"; [ -n "$out" ] && [ "$out" = "$(grep -n -x -F "$hybrid" "$wf")" ] && rc=0 || rc=1
-expect "one runner: self-hosted only for private and internal repositories" 0
+run grep -c -E -- '--history-needed "\$CURRENT_BASE"|fresh-clone.sh" "\$RUNNER_TEMP/pr-history"' "$wf"
+expect "workflow: config-only preflight gates complete history" 0 '^2$'
+run grep -n -E 'runs-on:' "$wf"; [ "$out" = "$(grep -n -x -F '    runs-on: ubuntu-latest' "$wf")" ] && rc=0 || rc=1
+expect "one isolated GitHub-hosted runner" 0
 run grep -n -E 'uses: [^ ]*@[^ ]*$' "$wf"; expect "every action is pinned with a version comment" 1
 run awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
 [ "$out" = "$(cat "$here/scripts/check-crate-tokens.py")" ] && rc=0 || rc=1
