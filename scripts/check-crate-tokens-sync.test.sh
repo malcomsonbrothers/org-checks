@@ -34,6 +34,13 @@ synced --ci HEAD~1; expect "a branch adding the default branch's rows without it
 git init -q "$work/shallow" && cd "$work/shallow"
 git fetch -q --depth 2 "file://$work/sync" +staging:refs/check/merge +master:refs/remotes/origin/master
 git checkout -q refs/check/merge; synced --ci HEAD^1; expect "a shallow clone is never a sync" 1 'new exempt line data/\*\*$'
+# Inside a sync a touched unit with a row must still strictly shrink against the base, even
+# when the default branch raised its row.
+repo shrink; crate big; big big/src/lib.rs; save; n=$(tokens big); cfg "baseline big $n"; save
+git branch staging; big big/src/lib.rs 41000; m=$(tokens big); cfg "baseline big $m"; save
+git update-ref refs/remotes/origin/master HEAD; git checkout -q staging; small b.rs; save; git merge -q --no-edit master
+synced --ci HEAD^1; expect "a sync still refuses a touched unit that grew" 1 "big: $m tokens must be strictly below measured base $n"
+printf '%s\n' "$out" | grep -q 'raised from' && expect "the default branch's raised row itself is accepted" x
 # Regrowth: master has 90000, staging lowered it to 70000; raising it back outside a sync is refused.
 repo regrow; crate a; small a/src/lib.rs; cfg 'baseline a 90000'; save; git update-ref refs/remotes/origin/master HEAD
 git checkout -q -b staging; cfg 'baseline a 70000'; save; git checkout -q -b pr; cfg 'baseline a 90000'; save

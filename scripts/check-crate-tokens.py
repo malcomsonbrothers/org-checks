@@ -553,7 +553,7 @@ def main(argv):
     os.chdir(git("rev-parse", "--show-toplevel").decode().strip())
     if mode == "--history-needed":
         added, candidates = config_delta(configs_at(resolve_base(argv[1]))[2], configs_at(argv[2] if len(argv) == 3 else "HEAD")[2])
-        candidates = candidates or added and sync_branch()  # telling a sync apart needs full history
+        candidates = bool(candidates or added and sync_branch())  # telling a sync apart needs full history
         print("crate-tokens: complete accepted history " + ("required" if candidates else "not needed"))
         return 3 if candidates else 0
     if mode in ("--ci", "--range"):
