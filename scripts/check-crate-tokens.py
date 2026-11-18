@@ -19,6 +19,9 @@
 #   check-crate-tokens.py --history-needed BASE [TIP]  config-only preflight; exit 3 if a
 #                                          candidate addition needs complete history
 # Rows and exemptions may never be added or raised. No label bypasses this policy.
+# Except in a sync (CRATE_TOKENS_HEAD_REF is the default branch, CRATE_TOKENS_HEAD_REPO is
+# CRATE_TOKENS_REPO, and in a full clone HEAD has origin/<default>'s tip but BASE does not):
+# lines at that tip, at that value or lower, passed there and count as accepted.
 # Above 50,000, a touched grandfathered unit must shrink below its measured base count AND
 # its base row, ratcheting the row to the new count. At <=50,000, just remove its row.
 # Measured files alone count as touches. Touched units warn at >=45,000.
@@ -444,6 +447,27 @@ def compare_base(base, per):
     return base, config_delta(configs_at(base)[2], per)[0]
 
 
+def sync_branch():  # the default branch if it is the head, from this repository (event data)
+    d, repo, env = os.environ.get("CRATE_TOKENS_DEFAULT_BRANCH"), os.environ.get("CRATE_TOKENS_REPO"), os.environ.get
+    return d if d and repo and env("CRATE_TOKENS_HEAD_REF") == d and env("CRATE_TOKENS_HEAD_REPO") == repo else None
+
+
+def accepted_per(base, tip, per):
+    """BASE's config lines, plus in a sync (see the top) the tip's, a row at the higher value."""
+    d = sync_branch()
+    sha = (d and git("rev-parse", "-q", "--verify", f"refs/remotes/origin/{d}^{{commit}}", check=False) or b"").decode().strip()
+    if not sha or git("rev-parse", "--is-shallow-repository").strip() != b"false" or git(
+            "merge-base", "--is-ancestor", sha, tip, check=False) is None or git(
+            "merge-base", "--is-ancestor", sha, base, check=False) is not None:
+        return per
+    merged = {name: (list(exempt), dict(rows)) for name, (exempt, rows) in per.items()}
+    for name, (exempt, rows) in configs_at(sha)[2].items():
+        old_exempt, old_rows = merged.setdefault(name, ([], {}))
+        old_exempt += [g for g in exempt if g not in old_exempt]
+        old_rows.update({u: max(n, old_rows.get(u, 0)) for u, n in rows.items()})
+    return merged
+
+
 def historical_units(base):
     """One accepted-history walk, one blob batch. Never include the PR's new ancestry."""
     if git("rev-parse", "--is-shallow-repository").strip() != b"false" or git(
@@ -483,7 +507,7 @@ def check_range(base, tip="HEAD", units=None):
     base = resolve_base(base)
     old_exempt, old_rows, old_per = configs_at(base)
     exempt, rows, per = configs_at(tip)
-    added, candidates = config_delta(old_per, per)
+    added, candidates = config_delta(accepted_per(base, tip, old_per), per)
     failures = [f"{name}: {message}" for name, message in added]
     if candidates:
         try:
@@ -528,7 +552,8 @@ def main(argv):
         return 2
     os.chdir(git("rev-parse", "--show-toplevel").decode().strip())
     if mode == "--history-needed":
-        _, candidates = config_delta(configs_at(resolve_base(argv[1]))[2], configs_at(argv[2] if len(argv) == 3 else "HEAD")[2])
+        added, candidates = config_delta(configs_at(resolve_base(argv[1]))[2], configs_at(argv[2] if len(argv) == 3 else "HEAD")[2])
+        candidates = candidates or added and sync_branch()  # telling a sync apart needs full history
         print("crate-tokens: complete accepted history " + ("required" if candidates else "not needed"))
         return 3 if candidates else 0
     if mode in ("--ci", "--range"):
