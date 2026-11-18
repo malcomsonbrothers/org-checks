@@ -98,6 +98,15 @@ quiet; expect "118 default-branch commits synced into <p>/swarm/run are not coun
 commits 90; push movopop/swarm/run; expect "the project's own 100 still warn" 0 '100 unreleased commits on movopop/swarm/run'
 commits 1; push movopop/swarm/run; expect "and 101 are refused" 1 'push refused at 101 or more'
 
+# A rebase merge stamps every released commit with one committer date, so the date bound alone
+# counted all 99 of them again once swarm/run held staging: ancestry must leave them out.
+repo rebased; cfg .release-guard 'refuse 101'; proj movopop; mark movopop/swarm/run; mark movopop/staging
+day=$((day + 1)); for ((i = 0; i < 99; i++)); do echo "$i" > projects/movopop/f; git add -A
+  GIT_COMMITTER_DATE="@$((1767225600 + day * 86400)) +0000" git commit -q -m "r$i"; done
+mark movopop/staging; push movopop/swarm/run; quiet; expect "swarm/run at a 99-commit rebase-merged release counts none" 0
+commits 2; push movopop/swarm/run; quiet; expect "and 2 more pass silently" 0
+commits 99; push movopop/swarm/run; expect "101 genuinely unreleased are still refused" 1 '^release-guard: 101 unreleased commits'
+
 # The org-hooks workflow runs on the default branch, staging and <p>/staging only. It accepts
 # this guard, and the previous copy only in a repository without projects/.
 wf="$here/.github/workflows/org-hooks.yml"
