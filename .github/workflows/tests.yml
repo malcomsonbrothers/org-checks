@@ -67,6 +67,11 @@ jobs:
           TIKTOKEN_CACHE_DIR: ${{ runner.tool_cache }}/tiktoken
         run: scripts/check-crate-tokens.test.sh
 
+      - name: Test the crate token check's sync rule
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.tool_cache }}/tiktoken
+        run: scripts/check-crate-tokens-sync.test.sh
+
       - name: Test that the checks compare with the current base, not a stale base.sha
         env:
           TIKTOKEN_CACHE_DIR: ${{ runner.tool_cache }}/tiktoken

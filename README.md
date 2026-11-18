@@ -165,7 +165,15 @@ limit with nothing exempt. Existing files contain one directive per line
   paths, without absolute paths, empty segments or `.` / `..` segments.
 
 **No new or raised baseline row, and no new exemption, is permitted.**
-There is no label or environment-variable bypass, including for syncs.
+There is no label or environment-variable bypass. The one exception is a
+sync (see `.file-lengths`): a pull request whose head is the repository's
+own default branch, not a fork's, into a base that lacks its tip. There, a
+line the default branch tip already has, at that value or lower, passed
+there and counts as accepted; anything new or higher still fails, and
+touched units must still shrink. Every other pull request, including
+feature and release pull requests and forks, compares with the base only.
+Telling a sync apart needs full history, so the job fetches it when the
+head is this repository's default branch and the config changed.
 Units without a row must be at most 50,000 tokens: split oversized code,
 never add an allowance. Moving a row between config files is an addition.
 Config files themselves are excluded from measurement.

@@ -3,40 +3,7 @@
 # throwaway git repo. Needs uv (it installs the pinned tiktoken). Usage:
 #   scripts/check-crate-tokens.test.sh
 set -euo pipefail
-here=$(cd "$(dirname "$0")/.." && pwd)
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_COMMITTER_NAME=t \
-  GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_EMAIL=t@example.com
-unset CRATE_TOKENS_EXCEPTION CRATE_TOKENS_DEFAULT_BRANCH CRATE_TOKENS_HEAD_REF CRATE_TOKENS_HEAD_REPO CRATE_TOKENS_REPO
-passed=0 failed=0
-
-repo() { # fresh repo on master with one commit
-  cd "$work" && rm -rf "${work:?}/$1" && git init -q -b master "$1" && cd "$1"
-  printf 'x\n' > README.md && save init
-}
-crate() { mkdir -p "$1" && printf '[package]\nname = "%s"\n' "${1##*/}" > "$1/Cargo.toml"; }
-pkg() { mkdir -p "$1" && printf '{ "name": "%s" }\n' "${1##*/}" > "$1/package.json"; }
-big() { mkdir -p "$(dirname "$1")" && seq 1 "${2:-40000}" > "$1"; } # well over 50k tokens
-small() { mkdir -p "$(dirname "$1")" && printf 'fn main() {}\n' > "$1"; }
-cfg() { printf '%s\n' "$@" > .crate-tokens; }
-save() { git add -A && git commit -q -m "${1:-c}"; }
-run() { out=$("$@" 2>&1) && rc=0 || rc=$?; }
-check() { run uv run --no-config --quiet --script "$here/scripts/check-crate-tokens.py" "$@"; }
-units() { check --report; printf '%s\n' "$out" | awk 'NR > 1 { print $4 }' | sort | tr '\n' ' '; }
-tokens() { check --report; printf '%s\n' "$out" | awk -v u="$1" '$4 == u { print $1 }'; }
-expect() { # expect NAME RC [PATTERN that must appear in the output]
-  if [ "$rc" = "$2" ] && { [ -z "${3:-}" ] || printf '%s\n' "$out" | grep -q -e "$3"; }; then
-    passed=$((passed + 1))
-  else
-    failed=$((failed + 1)); echo "not ok: $1 (exit $rc, wanted $2${3:+, /$3/})"; printf '%s\n' "$out" | sed 's/^/    /'
-  fi
-}
-same() { # same NAME GOT WANT
-  if [ "$2" = "$3" ]; then passed=$((passed + 1)); else
-    failed=$((failed + 1)); echo "not ok: $1"; echo "    got:  $2"; echo "    want: $3"
-  fi
-}
+. "$(dirname "$0")/crate-tokens-test-helpers.sh"
 
 # Discovery: Cargo packages and JS/TS packages, not workspace roots, node_modules or build output.
 repo discover
@@ -179,24 +146,6 @@ pcfg a "baseline . $((na + 5))" "baseline core $nc"; save
 check --ci HEAD~1; expect "a raised folder row" 1 "^\[FAIL\] projects/a/.crate-tokens: baseline row projects/a raised from $na to $((na + 5))$"
 pcfg a "baseline core $nc"; cfg "baseline projects/a $na"; save
 check --ci HEAD~1; expect "moving a row to the root is new there" 1 "^\[FAIL\] .crate-tokens: new baseline row projects/a $na$"
-
-# Syncs cannot add or raise allowances either, even when accepted on the default branch.
-repo sync; crate a; small a/src/lib.rs; cfg 'baseline a 60000'; save; git branch staging
-export CRATE_TOKENS_DEFAULT_BRANCH=master CRATE_TOKENS_REPO=o/r
-cfg 'baseline a 65000' 'exempt data/**'; save; git update-ref refs/remotes/origin/master HEAD
-git checkout -q staging; small b.rs; save; git merge -q --no-edit master
-CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1; expect "a sync cannot raise a row" 1 'raised from 60000 to 65000$'
-CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=fork/r check --ci HEAD^1; expect "a fork's default branch is no sync" 1 'new exempt line data/\*\*$'
-CRATE_TOKENS_HEAD_REF=feat CRATE_TOKENS_HEAD_REPO=o/r check --ci HEAD^1
-expect "a feature branch that merged the default branch tip gets no lines from it" 1 'raised from 60000 to 65000$'
-export CRATE_TOKENS_HEAD_REF=master CRATE_TOKENS_HEAD_REPO=o/r
-git checkout -q -b feat HEAD^1; cfg 'baseline a 60000' 'exempt data/**'; save
-check --ci HEAD~1; expect "a feature branch adding the default branch's line still fails" 1 'new exempt line data/\*\*$'
-# Regrowth: master has 90000, staging lowered it to 70000; raising it back is not a sync.
-repo regrow; crate a; small a/src/lib.rs; cfg 'baseline a 90000'; save; git update-ref refs/remotes/origin/master HEAD
-git checkout -q -b staging; cfg 'baseline a 70000'; save; git checkout -q -b pr; cfg 'baseline a 90000'; save
-CRATE_TOKENS_HEAD_REF=feat check --ci staging; expect "a row regrown to the default branch's value is refused" 1 'raised from 70000 to 90000$'
-unset CRATE_TOKENS_DEFAULT_BRANCH CRATE_TOKENS_REPO CRATE_TOKENS_HEAD_REF CRATE_TOKENS_HEAD_REPO
 
 repo dotdir; crate projects/.hid; big projects/.hid/src/lib.rs; save; n=$(tokens projects/.hid)
 pcfg .hid "baseline . $n"; check; expect "a dot-folder config is not read" 1 '^\[FAIL\] projects/.hid: '
