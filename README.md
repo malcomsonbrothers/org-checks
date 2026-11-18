@@ -166,7 +166,7 @@ limit with nothing exempt. Existing files contain one directive per line
 
 **No new or raised baseline row, and no new exemption, is permitted.**
 There is no label or environment-variable bypass. The one exception is a
-sync (see `.file-lengths`): a pull request whose head is the repository's
+sync (as defined under [`.file-lengths`](#file-lengths-1)): a pull request whose head is the repository's
 own default branch, not a fork's, into a base that lacks its tip. There, a
 line the default branch tip already has, at that value or lower, passed
 there and counts as accepted; anything new or higher still fails, and
