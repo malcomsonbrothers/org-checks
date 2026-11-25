@@ -5,7 +5,7 @@
 # differs from it.
 .github/workflows/file-lengths.yml e5fa3d2297487fb11841031ae0241d82047961f7
 .github/workflows/pr-title.yml 13e53a5b9ec408a710b656344045bea180dcb949
-.github/workflows/crate-tokens.yml e5fa3d2297487fb11841031ae0241d82047961f7
+.github/workflows/crate-tokens.yml 229c0d333cee59b085d0afeeee44f0e29956a50e
 .github/workflows/commit-size.yml e5fa3d2297487fb11841031ae0241d82047961f7
 .github/workflows/path-collisions.yml 97138a0ee47c25cd356dc50df3ad5892638fab0f
 .github/workflows/no-binaries.yml e5fa3d2297487fb11841031ae0241d82047961f7
