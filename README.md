@@ -187,7 +187,8 @@ and exempt/generated-only changes are not touches. Mode-only changes to
 measured files are touches. Ownership changes are checked in both trees, so
 moving source between units does not hide a touch. Untouched grandfathered
 units still pass within their existing budget. Touched units at or above
-45,000 print `[WARN]`; warnings alone exit successfully.
+40,000 (80%) print `[WARN]` with their headroom, which CI shows as a warning
+annotation; warnings alone exit successfully.
 
 A proposed new row also undergoes an accepted-history check: one config-only
 history walk over the current protected base and trusted default branch,
