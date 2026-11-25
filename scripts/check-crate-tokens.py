@@ -24,7 +24,7 @@
 # lines at that tip, at that value or lower, passed there and count as accepted.
 # Above 50,000, a touched grandfathered unit must shrink below its measured base count AND
 # its base row, ratcheting the row to the new count. At <=50,000, just remove its row.
-# Measured files alone count as touches. Touched units warn at >=45,000.
+# Measured files alone count as touches. Touched units warn at >=40,000 (80%) with their headroom.
 # Deleted units must lose their rows.
 # An all-zero or missing BASE falls back to the merge-base with the default branch
 # (CRATE_TOKENS_DEFAULT_BRANCH, else origin/HEAD, origin/main or origin/master).
@@ -386,8 +386,8 @@ def unit_verdict(count, row=None, *, old_count=None, old_row=None, touched=False
         failures.append(f"{count} tokens, baseline {row} (grew; split it)")
     elif row is None and count > LIMIT:
         failures.append(f"{count} tokens, limit {LIMIT} (split it)")
-    if touched and count >= 45_000:
-        warnings.append(f"{count} tokens, approaching the {LIMIT} limit; split it")
+    if touched and count >= 40_000:
+        warnings.append(f"{count:,}/{LIMIT:,} tokens " + (f"({LIMIT - count:,} left); split it along a seam" if count <= LIMIT else "(over the limit)"))
     return failures, warnings
 
 
