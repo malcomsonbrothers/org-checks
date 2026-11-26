@@ -23,6 +23,7 @@ lib='function ext(p) { sub(/.*\//, "", p); sub(/^\.+/, "", p); if (p !~ /\.[^.]+
       if (w != "" && w !~ /^(env|npx|bunx|run)$/) return (w in via) ? via[w] : "" }; return "" }
   BEGIN { _n = split(sb, _r, ";"); for (_i = 1; _i <= _n; _i++) { _k = split(_r[_i], _w, " "); for (_j = 2; _j <= _k; _j++) via[_w[_j]] = _w[1] } }'
 
+engine_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$(git rev-parse --show-toplevel)"
 config=.file-lengths
 mode=${1:-all}
@@ -38,15 +39,11 @@ fallback_base() {
   done
 }
 
-# Prints origin/<default branch>'s tip in a sync: FILE_LENGTHS_HEAD_REF is that branch (or <p>/sync/<x> into BASE_REF <p>/staging,
-# BASE ($1) having projects/<p>/), FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has the tip but BASE not.
+# Prints origin/<default branch>'s tip in a sync (see sync-tip.sh, which sits beside this engine), else nothing.
 sync_tip() {
-  local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} h=${FILE_LENGTHS_HEAD_REF:-} p=${FILE_LENGTHS_BASE_REF:-} t
-  [[ $p =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*/staging$ && $h == "${p%/staging}"/sync/?* ]] && [ "$(git cat-file -t "$1:projects/${p%/staging}" 2>/dev/null)" = tree ] && h=$d
-  [ -n "$d" ] && [ "$h" = "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
-  [ "${FILE_LENGTHS_HEAD_REPO:-}" = "$FILE_LENGTHS_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") || return 0
-  [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" HEAD || return 0
-  git merge-base --is-ancestor "$t" "$1" 2>/dev/null || echo "$t"
+  [ -x "$engine_dir/sync-tip.sh" ] || fail "sync-tip.sh is missing beside the engine"
+  "$engine_dir/sync-tip.sh" "${FILE_LENGTHS_DEFAULT_BRANCH:-}" "${FILE_LENGTHS_REPO:-}" "${FILE_LENGTHS_HEAD_REPO:-}" \
+    "${FILE_LENGTHS_BASE_REF:-}" "${FILE_LENGTHS_HEAD_REF:-}" "$1" HEAD
 }
 
 # Copies .file-lengths and each projects/<p>/.file-lengths at SRC (a commit, : for the

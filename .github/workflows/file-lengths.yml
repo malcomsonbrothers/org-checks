@@ -182,6 +182,29 @@ jobs:
           FILE_LENGTHS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           FILE_LENGTHS_REPO: ${{ github.repository }}
         run: |
+          # The sync rule the engine runs from beside it (scripts/sync-tip.sh, embedded like the engine).
+          cat > "$RUNNER_TEMP/sync-tip.sh" <<'SYNC'
+          #!/usr/bin/env bash
+          # Tells a sync pull request apart for the shrink-only config rules of commit-size, file-lengths and
+          # crate-tokens, which run it from beside their engine. A sync's head comes from this repository (REPO),
+          # its head ref is the default branch, or <p>/sync/<x> into BASE_REF <p>/staging where BASE has
+          # projects/<p>/, and in a full clone TIP has origin/<default>'s tip while BASE does not. Only then do
+          # that tip's own config lines count as old too; anything beyond them still needs the exception label.
+          #   sync-tip.sh DEFAULT REPO HEAD_REPO BASE_REF HEAD_REF BASE [TIP]
+          # Without TIP: exit 0 if the refs allow a sync, else 1. With TIP: prints the tip in a sync, else nothing.
+          set -euo pipefail
+          [ $# -eq 6 ] || [ $# -eq 7 ] || { echo "usage: sync-tip.sh DEFAULT REPO HEAD_REPO BASE_REF HEAD_REF BASE [TIP]" >&2; exit 2; }
+          d=$1 h=$5 base=$6
+          if [[ $4 =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)/staging$ ]] && [[ $h == "${BASH_REMATCH[1]}"/sync/?* ]] &&
+            [ -n "$base" ] && [ "$(git cat-file -t "$base:projects/${4%/staging}" 2>/dev/null)" = tree ]; then h=$d; fi
+          if [ -z "$d" ] || [ "$h" != "$d" ] || [ -z "$2" ] || [ "$3" != "$2" ]; then [ $# -eq 7 ] && exit 0; exit 1; fi
+          [ $# -eq 7 ] || exit 0
+          t=$(git rev-parse -q --verify "refs/remotes/origin/$d^{commit}") || exit 0
+          [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" "$7" || exit 0
+          [ -n "$base" ] && git merge-base --is-ancestor "$t" "$base" 2>/dev/null && exit 0
+          echo "$t"
+          SYNC
+          chmod +x "$RUNNER_TEMP/sync-tip.sh"
           engine="$RUNNER_TEMP/check-file-lengths.sh"
           cat > "$engine" <<'ENGINE'
           #!/usr/bin/env bash
@@ -209,6 +232,7 @@ jobs:
                 if (w != "" && w !~ /^(env|npx|bunx|run)$/) return (w in via) ? via[w] : "" }; return "" }
             BEGIN { _n = split(sb, _r, ";"); for (_i = 1; _i <= _n; _i++) { _k = split(_r[_i], _w, " "); for (_j = 2; _j <= _k; _j++) via[_w[_j]] = _w[1] } }'
 
+          engine_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
           cd "$(git rev-parse --show-toplevel)"
           config=.file-lengths
           mode=${1:-all}
@@ -224,15 +248,11 @@ jobs:
             done
           }
 
-          # Prints origin/<default branch>'s tip in a sync: FILE_LENGTHS_HEAD_REF is that branch (or <p>/sync/<x> into BASE_REF <p>/staging,
-          # BASE ($1) having projects/<p>/), FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has the tip but BASE not.
+          # Prints origin/<default branch>'s tip in a sync (see sync-tip.sh, which sits beside this engine), else nothing.
           sync_tip() {
-            local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} h=${FILE_LENGTHS_HEAD_REF:-} p=${FILE_LENGTHS_BASE_REF:-} t
-            [[ $p =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*/staging$ && $h == "${p%/staging}"/sync/?* ]] && [ "$(git cat-file -t "$1:projects/${p%/staging}" 2>/dev/null)" = tree ] && h=$d
-            [ -n "$d" ] && [ "$h" = "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
-            [ "${FILE_LENGTHS_HEAD_REPO:-}" = "$FILE_LENGTHS_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") || return 0
-            [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" HEAD || return 0
-            git merge-base --is-ancestor "$t" "$1" 2>/dev/null || echo "$t"
+            [ -x "$engine_dir/sync-tip.sh" ] || fail "sync-tip.sh is missing beside the engine"
+            "$engine_dir/sync-tip.sh" "${FILE_LENGTHS_DEFAULT_BRANCH:-}" "${FILE_LENGTHS_REPO:-}" "${FILE_LENGTHS_HEAD_REPO:-}" \
+              "${FILE_LENGTHS_BASE_REF:-}" "${FILE_LENGTHS_HEAD_REF:-}" "$1" HEAD
           }
 
           # Copies .file-lengths and each projects/<p>/.file-lengths at SRC (a commit, : for the
