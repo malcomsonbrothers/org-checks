@@ -19,8 +19,8 @@
 #   check-crate-tokens.py --history-needed BASE [TIP]  config-only preflight; exit 3 if a
 #                                          candidate addition needs complete history
 # Rows and exemptions may never be added or raised. No label bypasses this policy.
-# Except in a sync (CRATE_TOKENS_HEAD_REF is the default branch, CRATE_TOKENS_HEAD_REPO is
-# CRATE_TOKENS_REPO, and in a full clone HEAD has origin/<default>'s tip but BASE does not):
+# Except in a sync (CRATE_TOKENS_HEAD_REPO is CRATE_TOKENS_REPO, and in a full clone HEAD has
+# origin/<default>'s tip but BASE does not, whatever the head ref):
 # lines at that tip, at that value or lower, passed there and count as accepted.
 # Above 50,000, a touched grandfathered unit must shrink below its measured base count AND
 # its base row, ratcheting the row to the new count. At <=50,000, just remove its row.
@@ -447,9 +447,9 @@ def compare_base(base, per):
     return base, config_delta(configs_at(base)[2], per)[0]
 
 
-def sync_branch():  # the default branch if it is the head, from this repository (event data)
+def sync_branch():  # the default branch if the head is from this repository (event data); git proves the merge
     d, repo, env = os.environ.get("CRATE_TOKENS_DEFAULT_BRANCH"), os.environ.get("CRATE_TOKENS_REPO"), os.environ.get
-    return d if d and repo and env("CRATE_TOKENS_HEAD_REF") == d and env("CRATE_TOKENS_HEAD_REPO") == repo else None
+    return d if d and repo and env("CRATE_TOKENS_HEAD_REPO") == repo else None
 
 
 def accepted_per(base, tip, per):

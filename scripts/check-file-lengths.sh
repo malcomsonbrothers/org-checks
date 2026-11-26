@@ -38,11 +38,12 @@ fallback_base() {
   done
 }
 
-# Prints the tip of origin/<default branch> in a sync: FILE_LENGTHS_HEAD_REF is that branch,
-# FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has the tip but BASE ($1) not.
+# Prints the tip of origin/<default branch> in a sync: FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and
+# in a full clone HEAD has the tip but BASE ($1) not. The head ref may be any branch that merged the tip
+# (the default branch itself, or a sync branch built from it): only the tip's own rows count as old.
 sync_tip() {
   local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} t
-  [ -n "$d" ] && [ "${FILE_LENGTHS_HEAD_REF:-}" = "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
+  [ -n "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
   [ "${FILE_LENGTHS_HEAD_REPO:-}" = "$FILE_LENGTHS_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") || return 0
   [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" HEAD || return 0
   git merge-base --is-ancestor "$t" "$1" 2>/dev/null || echo "$t"
