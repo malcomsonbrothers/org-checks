@@ -53,7 +53,6 @@ jobs:
           FRESH_CLONE_TOKEN: ${{ github.token }}
           PR_MERGE: ${{ github.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -122,14 +121,13 @@ jobs:
           chmod +x "$clone"
           # The engine reads the pull request's merge commit (what actions/checkout gave it), and the
           # config files of its first parent (the base) and of the default branch, never with a filter.
-          # Two commits of each are enough (the merge and its parents), except for a possible sync (this
-          # repository's default branch into another branch), where the engine needs full history; it
-          # treats a shallow clone as no sync.
+          # Two commits of each are enough (the merge and its parents), except for a possible sync (a head
+          # from this repository that merged the default branch, into another branch), where the engine
+          # needs full history; it treats a shallow clone as no sync. Only a change to a .file-lengths can
+          # need a sync, so only then is the clone made again in full, once the base is known below.
+          refs=("+$PR_MERGE:refs/check/merge" "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH")
           depth=(--depth 2)
-          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REF" = "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then depth=(); fi
-          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" \
-            "+$PR_MERGE:refs/check/merge" \
-            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" "${refs[@]}"
           # Compare with the base branch tip the merge was built on, never the event's base.sha, which
           # can be older (see scripts/current-base.sh, embedded like the clone script).
           base_of="$RUNNER_TEMP/current-base.sh"
@@ -154,6 +152,10 @@ jobs:
           BASE
           chmod +x "$base_of"
           base=$(cd "$RUNNER_TEMP/pr" && "$base_of" "$PR_MERGE")
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] &&
+            ! git -C "$RUNNER_TEMP/pr" diff --quiet "$base" "$PR_MERGE" -- .file-lengths ':(glob)projects/*/.file-lengths'; then
+            "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --checkout "$PR_MERGE" "${refs[@]}"
+          fi
           echo "CURRENT_BASE=$base" >> "$GITHUB_ENV"
           echo "Comparing with $base, the first parent of the merge commit $PR_MERGE"
 
@@ -175,7 +177,6 @@ jobs:
         working-directory: ${{ runner.temp }}/pr
         env:
           FILE_LENGTHS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          FILE_LENGTHS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           FILE_LENGTHS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           FILE_LENGTHS_REPO: ${{ github.repository }}
         run: |
@@ -221,11 +222,12 @@ jobs:
             done
           }
 
-          # Prints the tip of origin/<default branch> in a sync: FILE_LENGTHS_HEAD_REF is that branch,
-          # FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has the tip but BASE ($1) not.
+          # Prints the tip of origin/<default branch> in a sync: FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and
+          # in a full clone HEAD has the tip but BASE ($1) not. The head ref may be any branch that merged the tip
+          # (the default branch itself, or a sync branch built from it): only the tip's own rows count as old.
           sync_tip() {
             local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} t
-            [ -n "$d" ] && [ "${FILE_LENGTHS_HEAD_REF:-}" = "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
+            [ -n "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
             [ "${FILE_LENGTHS_HEAD_REPO:-}" = "$FILE_LENGTHS_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") || return 0
             [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" HEAD || return 0
             git merge-base --is-ancestor "$t" "$1" 2>/dev/null || echo "$t"
