@@ -14,10 +14,8 @@
 # default branch, COMMIT_SIZE_HEAD_REF is staging, or <project>/staging where BASE has a
 # projects/<project>/ folder, and COMMIT_SIZE_HEAD_REPO equals COMMIT_SIZE_REPO) skips commits
 # already on origin/<head ref>. Any pull request skips commits already on the default branch,
-# which passed in their own pull request. In a sync (COMMIT_SIZE_HEAD_REF is the default branch,
-# or <p>/sync/<x> into COMMIT_SIZE_BASE_REF <p>/staging where BASE has projects/<p>/,
-# COMMIT_SIZE_HEAD_REPO is COMMIT_SIZE_REPO, and in a full clone TIP has the default branch tip
-# while BASE does not) the default branch's .commit-size lines count as old too.
+# which passed in their own pull request. In a sync (see sync-tip.sh, beside this engine) the
+# default branch's .commit-size lines count as old too.
 # .commit-size lines, read at TIP (# starts a comment):   exempt <glob>
 # Globs: * is one path segment, ** any depth; other characters are literal. Each
 # projects/<p>/.commit-size adds exempt lines relative to its folder.
@@ -32,6 +30,7 @@ lockfiles+=" pnpm-lock.yaml:package.json yarn.lock:package.json uv.lock:pyprojec
 # Binary formats exempt only where the content really is binary (to git, ignoring attributes).
 binexts="png jpg jpeg gif webp avif ico woff woff2 ttf otf pdf mp4 webm wasm jar so zip gz tar"
 
+engine_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$(git rev-parse --show-toplevel)"
 config=.commit-size
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -228,15 +227,9 @@ fi
 
 # CI: each .commit-size may only shrink against BASE, and in a sync (see above) the default branch tip.
 if [ "$ci" -eq 1 ]; then
-  h=$head
-  if [[ ${COMMIT_SIZE_BASE_REF:-} =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)/staging$ ]]; then
-    p=${BASH_REMATCH[1]}
-    if [[ $h == "$p"/sync/?* ]] && [ "$(git cat-file -t "$base:projects/$p" 2>/dev/null)" = tree ]; then h=${COMMIT_SIZE_DEFAULT_BRANCH:-}; fi
-  fi
-  sync=""; if [ -n "$dflt" ] && [ -n "${COMMIT_SIZE_DEFAULT_BRANCH:-}" ] && [ "$h" = "$COMMIT_SIZE_DEFAULT_BRANCH" ] &&
-    [ -n "${COMMIT_SIZE_REPO:-}" ] && [ "${COMMIT_SIZE_HEAD_REPO:-}" = "$COMMIT_SIZE_REPO" ] &&
-    [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$dflt" "$tip" &&
-    ! git merge-base --is-ancestor "$dflt" "$base" 2>/dev/null; then sync=$dflt; fi
+  [ -x "$engine_dir/sync-tip.sh" ] || fail "sync-tip.sh is missing beside the engine"
+  sync=$("$engine_dir/sync-tip.sh" "${COMMIT_SIZE_DEFAULT_BRANCH:-}" "${COMMIT_SIZE_REPO:-}" "${COMMIT_SIZE_HEAD_REPO:-}" \
+    "${COMMIT_SIZE_BASE_REF:-}" "$head" "$base" "$tip")
   for r in "$base" "$sync"; do [ -z "$r" ] || rules_at "$r"; done | grep '^E ' > "$tmp/old-rules" || true
   awk 'FILENAME == ARGV[1] { old[$2 " " $4] = 1; next } $1 == "E" && !(($2 " " $4) in old) { print $4 " new exempt line " $3 }' \
     "$tmp/old-rules" "$tmp/rules" > "$tmp/added"

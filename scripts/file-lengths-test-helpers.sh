@@ -10,7 +10,7 @@ passed=0 failed=0 zero=0000000000000000000000000000000000000000
 
 repo() { # fresh repo with the check and hooks committed on master
   cd "$work" && rm -rf "$1" "$1.git" && git init -q -b master "$1" && cd "$1"
-  mkdir scripts .githooks && cp "$here/scripts/check-file-lengths.sh" scripts/
+  mkdir scripts .githooks && cp "$here/scripts/check-file-lengths.sh" "$here/scripts/sync-tip.sh" scripts/
   cp "$here/.githooks/pre-commit" "$here/.githooks/pre-push" .githooks/
   mkdir .githooks/org && cp "$here/.githooks/org/pre-push-guards.sh" .githooks/org/
   git config core.hooksPath .githooks && save init

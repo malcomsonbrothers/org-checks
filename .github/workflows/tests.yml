@@ -1,4 +1,4 @@
-# Tests for the file length check, its git hooks, the crate token check,
+# Tests for the file length check, its git hooks, the crate token check, the sync rule helper,
 # the commit size check, the pre-push release guard and the org-hooks check,
 # the pull request title check, the path collision check, the stale ruleset
 # pin check, the fresh clone the required workflows check in, the base they
@@ -32,6 +32,15 @@ jobs:
 
       - name: Test the commit size check
         run: scripts/check-commit-size.test.sh
+
+      - name: Test the commit size check's sync rule
+        run: scripts/check-commit-size-sync.test.sh
+
+      - name: Check the sync rule helper copies
+        run: |
+          for wf in commit-size crate-tokens file-lengths; do
+            awk '/<<.SYNC.$/ { on = 1; next } /^ *SYNC$/ { on = 0 } on { sub(/^          /, ""); print }' ".github/workflows/$wf.yml" | cmp - scripts/sync-tip.sh
+          done
 
       - name: Test the pre-push release guard
         run: scripts/pre-push-guards.test.sh

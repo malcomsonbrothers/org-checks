@@ -2,32 +2,7 @@
 # Tests for check-commit-size.sh and the copy embedded in the required workflow. Each case
 # runs in a throwaway git repo. Usage: scripts/check-commit-size.test.sh
 set -euo pipefail
-here=$(cd "$(dirname "$0")/.." && pwd)
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_COMMITTER_NAME=t \
-  GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_EMAIL=t@example.com
-unset COMMIT_SIZE_EXCEPTION COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_BASE_REF COMMIT_SIZE_HEAD_REF \
-  COMMIT_SIZE_HEAD_REPO COMMIT_SIZE_REPO
-passed=0 failed=0 zero=0000000000000000000000000000000000000000
-
-repo() { # fresh repo with one small commit on master, work continuing on branch pr
-  cd "$work" && rm -rf "$1" && git init -q -b master "$1" && cd "$1"
-  echo init > README && save init && git checkout -q -b pr
-}
-body() { awk -v n="$1" -v t="${2:-x}" 'BEGIN { for (i = 1; i <= n; i++) print t i }'; }
-lines() { mkdir -p "$(dirname "$2")"; body "$1" "${3:-x}" > "$2"; }
-cfg() { printf '%s\n' "$@" > .commit-size; }
-save() { git add -A && git commit -q -m "${1:-c}"; }
-run() { out=$("$@" 2>&1) && rc=0 || rc=$?; }
-check() { run "$here/scripts/check-commit-size.sh" "$@"; }
-expect() { # expect NAME RC [PATTERN that must appear in the output]
-  if [ "$rc" = "$2" ] && { [ -z "${3:-}" ] || grep -q -e "$3" <<<"$out"; }; then
-    passed=$((passed + 1))
-  else
-    failed=$((failed + 1)); echo "not ok: $1 (exit $rc, wanted $2${3:+, /$3/})"; printf '%s\n' "$out" | sed 's/^/    /'
-  fi
-}
+. "$(dirname "$0")/commit-size-test-helpers.sh"
 
 # The limit is 1,000 changed lines per commit; over it fails, naming the commit and its size.
 repo limit; lines 1000 a.rs; save "feat: exactly at the limit"
@@ -180,27 +155,6 @@ COMMIT_SIZE_BASE_REF=movopop/staging COMMIT_SIZE_HEAD_REF=movopop/staging COMMIT
 expect "<p>/staging into itself does not skip" 1 'big on movopop staging: 1001'
 unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
-# Any pull request skips commits on the default branch; a sync (head ref is the default branch in
-# this repository, TIP has its tip, BASE does not) also takes its .commit-size lines as old.
-repo sync; git branch -q staging master; git checkout -q master
-cfg 'exempt gen/**'; lines 1500 big.rs; save "feat: labelled on master"; git update-ref refs/remotes/origin/master HEAD
-export COMMIT_SIZE_DEFAULT_BRANCH=master COMMIT_SIZE_REPO=o/r
-COMMIT_SIZE_HEAD_REF=master COMMIT_SIZE_HEAD_REPO=o/r check --ci staging master; expect "a sync skips the default branch's commits and lines" 0 '0 commit(s) checked'
-COMMIT_SIZE_HEAD_REF=master COMMIT_SIZE_HEAD_REPO=fork/r check --ci staging master; expect "a fork's default branch is no sync" 1 'new exempt line gen/\*\*$'
-git checkout -q staging; git merge -q master; cfg; save "chore: staging drops it"
-git checkout -q -b regrow; cfg 'exempt gen/**'; save "chore: regrow"
-COMMIT_SIZE_HEAD_REF=master COMMIT_SIZE_HEAD_REPO=o/r check --ci staging HEAD; expect "a line the base dropped is new again" 1 'new exempt line gen/\*\*$'
-# A <p>/sync/<x> head into <p>/staging (BASE has projects/<p>/) is a sync too; no other head is.
-repo psync; git checkout -q master; lines 1 projects/movopop/README; save; git branch -q staging
-cfg 'exempt gen/**'; save "chore: exempt on master"; git update-ref refs/remotes/origin/master HEAD
-git checkout -q staging; lines 1 s.rs; save; git merge -q --no-edit refs/remotes/origin/master
-psync() { COMMIT_SIZE_BASE_REF=${2:-movopop/staging} COMMIT_SIZE_HEAD_REF=$1 COMMIT_SIZE_HEAD_REPO=o/r check --ci staging~1 HEAD; }
-psync movopop/sync/auto; expect "a project sync branch takes the default branch's lines" 0 'commit-size: ok'
-for h in movopop/sync/ other/sync/auto feat; do psync "$h"; expect "head $h into movopop/staging is no sync" 1 'new exempt line gen/\*\*$'; done
-psync other/sync/auto other/staging; expect "a sync branch without projects/<p>/ at the base is no sync" 1 'new exempt line gen/\*\*$'
-cfg 'exempt gen/**' 'exempt more/**'; save "chore: sneak a line in"
-psync movopop/sync/auto; expect "a project sync branch cannot add a line beyond the default branch's" 1 'new exempt line more/\*\*$'
-unset COMMIT_SIZE_DEFAULT_BRANCH COMMIT_SIZE_REPO
 
 # BASE: zero falls back to the merge-base with the default branch; a root commit is measured.
 repo fallback; lines 1001 a.rs; save big; git update-ref refs/remotes/origin/master master
