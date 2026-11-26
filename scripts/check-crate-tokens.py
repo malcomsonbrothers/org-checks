@@ -19,8 +19,9 @@
 #   check-crate-tokens.py --history-needed BASE [TIP]  config-only preflight; exit 3 if a
 #                                          candidate addition needs complete history
 # Rows and exemptions may never be added or raised. No label bypasses this policy.
-# Except in a sync (CRATE_TOKENS_HEAD_REPO is CRATE_TOKENS_REPO, and in a full clone HEAD has
-# origin/<default>'s tip but BASE does not, whatever the head ref):
+# Except in a sync (CRATE_TOKENS_HEAD_REF is the default branch, or <p>/sync/<x> into
+# CRATE_TOKENS_BASE_REF <p>/staging where BASE has projects/<p>/, CRATE_TOKENS_HEAD_REPO is
+# CRATE_TOKENS_REPO, and in a full clone HEAD has origin/<default>'s tip but BASE does not):
 # lines at that tip, at that value or lower, passed there and count as accepted.
 # Above 50,000, a touched grandfathered unit must shrink below its measured base count AND
 # its base row, ratcheting the row to the new count. At <=50,000, just remove its row.
@@ -447,14 +448,19 @@ def compare_base(base, per):
     return base, config_delta(configs_at(base)[2], per)[0]
 
 
-def sync_branch():  # the default branch if the head is from this repository (event data); git proves the merge
+def sync_branch(base):  # the default branch if it (or a project's sync branch) is the head, from this repository
     d, repo, env = os.environ.get("CRATE_TOKENS_DEFAULT_BRANCH"), os.environ.get("CRATE_TOKENS_REPO"), os.environ.get
-    return d if d and repo and env("CRATE_TOKENS_HEAD_REPO") == repo else None
+    head = env("CRATE_TOKENS_HEAD_REF", "")
+    m = re.fullmatch(r"([A-Za-z0-9_-][A-Za-z0-9._-]*)/staging", env("CRATE_TOKENS_BASE_REF", ""))
+    if m and head.startswith(f"{m[1]}/sync/") and len(head) > len(m[1]) + 6 and git(
+            "cat-file", "-t", f"{base}:projects/{m[1]}", check=False) == b"tree\n":
+        head = d
+    return d if d and repo and head == d and env("CRATE_TOKENS_HEAD_REPO") == repo else None
 
 
 def accepted_per(base, tip, per):
     """BASE's config lines, plus in a sync (see the top) the tip's, a row at the higher value."""
-    d = sync_branch()
+    d = sync_branch(base)
     sha = (d and git("rev-parse", "-q", "--verify", f"refs/remotes/origin/{d}^{{commit}}", check=False) or b"").decode().strip()
     if not sha or git("rev-parse", "--is-shallow-repository").strip() != b"false" or git(
             "merge-base", "--is-ancestor", sha, tip, check=False) is None or git(
@@ -552,8 +558,9 @@ def main(argv):
         return 2
     os.chdir(git("rev-parse", "--show-toplevel").decode().strip())
     if mode == "--history-needed":
-        added, candidates = config_delta(configs_at(resolve_base(argv[1]))[2], configs_at(argv[2] if len(argv) == 3 else "HEAD")[2])
-        candidates = bool(candidates or added and sync_branch())  # telling a sync apart needs full history
+        base = resolve_base(argv[1])
+        added, candidates = config_delta(configs_at(base)[2], configs_at(argv[2] if len(argv) == 3 else "HEAD")[2])
+        candidates = bool(candidates or added and sync_branch(base))  # telling a sync apart needs full history
         print("crate-tokens: complete accepted history " + ("required" if candidates else "not needed"))
         return 3 if candidates else 0
     if mode in ("--ci", "--range"):

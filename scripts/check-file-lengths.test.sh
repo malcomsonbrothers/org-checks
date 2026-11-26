@@ -165,17 +165,16 @@ FILE_LENGTHS_EXCEPTION=true check --ci HEAD~1; expect "the label allows a folder
 pcfg a 'baseline big.rs 650' 'exempt gen/**'; cfg 'baseline projects/a/new.rs 700'; save
 check --ci HEAD~1; expect "moving a row to another file is a new row there" 1 '^\[FAIL\] .file-lengths: new baseline row projects/a/new.rs 700$'
 
-# A sync (a head from this repository, whatever its ref, HEAD has the tip of origin/<default>,
+# A sync (head ref is the default branch in this repository, HEAD has the tip of origin/<default>,
 # BASE does not) takes the tip's rows as old.
 repo sync; cfg '# rows'; save; git branch staging; export FILE_LENGTHS_DEFAULT_BRANCH=master FILE_LENGTHS_REPO=o/r
 lines 650 b.ts; cfg 'baseline b.ts 650'; save; git update-ref refs/remotes/origin/master HEAD
 git checkout -q staging; lines 1 s.ts; save; git merge -q --no-edit master
-FILE_LENGTHS_HEAD_REPO=o/r check --ci HEAD^1; expect "a sync takes the default branch's rows" 0
-FILE_LENGTHS_HEAD_REPO=fork/r check --ci HEAD^1; expect "a fork's branch is no sync" 1 'new baseline row b.ts 650'
-export FILE_LENGTHS_HEAD_REPO=o/r
-lines 650 c.ts; cfg 'baseline b.ts 650' 'baseline c.ts 650' # the merge's working tree, uncommitted
-check --ci HEAD^1; expect "a sync still cannot add a row beyond the default branch's" 1 'new baseline row c.ts 650'
-git checkout -q -- .file-lengths; rm c.ts
+FILE_LENGTHS_HEAD_REF=master FILE_LENGTHS_HEAD_REPO=o/r check --ci HEAD^1; expect "a sync takes the default branch's rows" 0
+FILE_LENGTHS_HEAD_REF=master FILE_LENGTHS_HEAD_REPO=fork/r check --ci HEAD^1; expect "a fork's default branch is no sync" 1 'new baseline row b.ts 650'
+FILE_LENGTHS_HEAD_REF=feat FILE_LENGTHS_HEAD_REPO=o/r check --ci HEAD^1
+expect "a feature branch that merged the default branch tip gets no rows from it" 1 'new baseline row b.ts 650'
+export FILE_LENGTHS_HEAD_REF=master FILE_LENGTHS_HEAD_REPO=o/r
 git checkout -q -b feat HEAD^1; lines 650 b.ts; cfg 'baseline b.ts 650'; save
 check --ci HEAD~1; expect "a branch without the tip gets no rows from it" 1 'new baseline row b.ts 650'
 # Regrowth: master has 900, staging lowered it to 700; raising it back is not a sync.
@@ -183,7 +182,26 @@ repo regrow; lines 900 a.ts; cfg 'baseline a.ts 900'; save; git update-ref refs/
 git checkout -q -b staging; lines 700 a.ts; cfg 'baseline a.ts 700'; save
 git checkout -q -b pr; lines 900 a.ts; cfg 'baseline a.ts 900'; save
 check --ci staging; expect "a row regrown to the default branch's value is refused" 1 'raised from 700 to 900'
-unset FILE_LENGTHS_DEFAULT_BRANCH FILE_LENGTHS_REPO FILE_LENGTHS_HEAD_REPO
+# A <p>/sync/<x> head into <p>/staging (BASE has projects/<p>/) is a sync too; no other head is.
+repo psync; lines 1 projects/movopop/README; cfg '# rows'; save; git branch staging
+lines 650 b.ts; cfg 'baseline b.ts 650'; save; git update-ref refs/remotes/origin/master HEAD
+git checkout -q staging; lines 1 s.ts; save; git merge -q --no-edit master
+psync() { FILE_LENGTHS_BASE_REF=${2:-movopop/staging} FILE_LENGTHS_HEAD_REF=$1 check --ci HEAD^1; }
+psync movopop/sync/auto; expect "a project sync branch takes the default branch's rows" 0
+for h in movopop/sync/ other/sync/auto feat; do psync "$h"; expect "head $h into movopop/staging is no sync" 1 'new baseline row b.ts 650'; done
+psync other/sync/auto other/staging; expect "a sync branch without projects/<p>/ at the base is no sync" 1 'new baseline row b.ts 650'
+lines 650 c.ts; cfg 'baseline b.ts 650' 'baseline c.ts 650' # the merge's working tree, uncommitted
+psync movopop/sync/auto; expect "a project sync branch cannot add a row beyond the default branch's" 1 'new baseline row c.ts 650'
+git checkout -q -- .file-lengths; rm c.ts
+# Regrowth through a merge: master has 900, staging lowered it to 700; a feature branch that merges
+# master and raises it back is refused.
+repo regrowmerge; lines 900 a.ts; cfg 'baseline a.ts 900'; save; git branch staging
+lines 1 m.ts; save; git update-ref refs/remotes/origin/master HEAD
+git checkout -q staging; lines 700 a.ts; cfg 'baseline a.ts 700'; save
+git checkout -q -b feat; git merge -q --no-edit master; lines 900 a.ts; cfg 'baseline a.ts 900'; save
+FILE_LENGTHS_BASE_REF=movopop/staging FILE_LENGTHS_HEAD_REF=feat check --ci staging
+expect "a feature branch that merged master cannot regrow a row staging lowered" 1 'raised from 700 to 900'
+unset FILE_LENGTHS_DEFAULT_BRANCH FILE_LENGTHS_REPO FILE_LENGTHS_HEAD_REF FILE_LENGTHS_HEAD_REPO
 
 repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > projects/.hid/.file-lengths; save
 check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'

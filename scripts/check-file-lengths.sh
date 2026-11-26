@@ -38,12 +38,12 @@ fallback_base() {
   done
 }
 
-# Prints the tip of origin/<default branch> in a sync: FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and
-# in a full clone HEAD has the tip but BASE ($1) not. The head ref may be any branch that merged the tip
-# (the default branch itself, or a sync branch built from it): only the tip's own rows count as old.
+# Prints origin/<default branch>'s tip in a sync: FILE_LENGTHS_HEAD_REF is that branch (or <p>/sync/<x> into BASE_REF <p>/staging,
+# BASE ($1) having projects/<p>/), FILE_LENGTHS_HEAD_REPO is FILE_LENGTHS_REPO, and in a full clone HEAD has the tip but BASE not.
 sync_tip() {
-  local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} t
-  [ -n "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
+  local d=${FILE_LENGTHS_DEFAULT_BRANCH:-} h=${FILE_LENGTHS_HEAD_REF:-} p=${FILE_LENGTHS_BASE_REF:-} t
+  [[ $p =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*/staging$ && $h == "${p%/staging}"/sync/?* ]] && [ "$(git cat-file -t "$1:projects/${p%/staging}" 2>/dev/null)" = tree ] && h=$d
+  [ -n "$d" ] && [ "$h" = "$d" ] && [ -n "${FILE_LENGTHS_REPO:-}" ] || return 0
   [ "${FILE_LENGTHS_HEAD_REPO:-}" = "$FILE_LENGTHS_REPO" ] && t=$(git rev-parse -q --verify "origin/$d^{commit}") || return 0
   [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" HEAD || return 0
   git merge-base --is-ancestor "$t" "$1" 2>/dev/null || echo "$t"
