@@ -1,5 +1,5 @@
 # Tests for the file length check, its git hooks, the crate token check, the sync rule helper,
-# the commit size check, the pre-push release guard and the org-hooks check,
+# the commit size check, the pre-push release guard and the org-hooks check, the no-stubs check's copy,
 # the pull request title check, the path collision check, the stale ruleset
 # pin check, the fresh clone the required workflows check in, the base they
 # compare with, and the copies embedded in their workflows.
@@ -38,7 +38,7 @@ jobs:
 
       - name: Check the sync rule helper copies
         run: |
-          for wf in commit-size crate-tokens file-lengths; do
+          for wf in commit-size crate-tokens file-lengths no-stubs; do
             awk '/<<.SYNC.$/ { on = 1; next } /^ *SYNC$/ { on = 0 } on { sub(/^          /, ""); print }' ".github/workflows/$wf.yml" | cmp - scripts/sync-tip.sh
           done
 
@@ -62,6 +62,11 @@ jobs:
 
       - name: Check the org hooks pin
         run: scripts/check-org-hooks-pin.sh
+
+      - name: Check the no-stubs workflow's engine copy
+        run: |
+          awk '/<<.ENGINE.$/ { on = 1; next } /^ *ENGINE$/ { on = 0 } on { sub(/^          /, ""); print }' \
+            .github/workflows/no-stubs.yml | cmp - scripts/check-no-stubs.sh
 
       - name: Check agent guidance workflow helper copies
         run: |

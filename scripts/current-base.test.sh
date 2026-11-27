@@ -82,7 +82,7 @@ run "$base_of"; expect "no argument fails" 2 usage
 
 # Each workflow that compares with the base embeds this exact script, fetches the merge, passes
 # its first parent to the engine and never reads the event's base.sha.
-for name in commit-size file-lengths crate-tokens no-binaries; do
+for name in commit-size file-lengths crate-tokens no-binaries no-stubs; do
   wf="$here/.github/workflows/$name.yml"
   run awk '/<<.BASE.$/ { on = 1; next } /^ *BASE$/ { on = 0 } on { sub(/^          /, ""); print }' "$wf"
   [ "$out" = "$(cat "$base_of")" ] && rc=0 || rc=1
@@ -94,7 +94,7 @@ for name in commit-size file-lengths crate-tokens no-binaries; do
     -e '--ci "$CURRENT_BASE"' "$wf"
   expect "$name: fetches the merge and checks against its first parent" 0 '^5$'
 done
-for name in file-lengths crate-tokens; do
+for name in file-lengths crate-tokens no-stubs; do
   run grep -c -F 'depth=(--depth 2)' "$here/.github/workflows/$name.yml"; expect "$name: fetches the merge's parents" 0 '^1$'
 done
 

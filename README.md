@@ -61,7 +61,7 @@ raised `baseline`, `exempt` or `limit` line fails unless a reviewer adds the
 `file-lengths-exception` label to the pull request and then re-runs the
 failed check (or closes and reopens the pull request). Required workflows
 do not re-run on label changes, and a re-run replays the original event, so
-every label-gated check (file lengths, commit size, no-binaries, commit count) reads the pull request's current labels through
+every label-gated check (file lengths, commit size, no-binaries, no stubs, commit count) reads the pull request's current labels through
 the API instead of the event. That also catches labels added just after
 the pull request opened, as `gh pr create --label` does.
 
@@ -400,6 +400,60 @@ are not beside it; it needs bash, git, awk, od and grep):
 scripts/check-binaries.sh origin/main HEAD
 ```
 
+## No stubs
+
+Candidate required workflow: `.github/workflows/no-stubs.yml` (no
+credentials). Adding it to the organisation ruleset is an owner step.
+Skeletons with stubs belong on swarm and item branches. On a pull request
+into the default branch, `staging` or `<project>/staging` (one folder
+segment) it fails while any file of the merge commit holds a stub, because
+testers and agents' end-to-end runs use staging and a stub that panics
+there is an outage. A pull request into any other branch passes without
+checking. The stubs, fixed in `scripts/check-no-stubs.sh`:
+
+- a Rust `todo!(` or `unimplemented!(` call (also with `[` or `{`, or a
+  space before the bracket) in a `.rs` file. A match after `//` or `/*` on
+  its line is a comment that only names the macro, such as a doc saying
+  "use `todo!()`", and passes
+- the marker `TODO-STUB` in any text file except Markdown (`md`,
+  `markdown`, `mdx`), where docs describe it. It is how other languages
+  mark a stub, for example `throw new Error("TODO-STUB: ...")`
+
+Python's `NotImplementedError`, `TODO` comments and the word todo are not
+stubs: they have legitimate uses. Binaries (a NUL byte, as `grep -I`
+decides), symlinks and submodules are skipped. The whole tree is checked,
+not just the pull request's changes, so a stub already on a branch fails
+every later pull request into it until it is implemented or exempted.
+
+### `.no-stubs`
+
+Without a `.no-stubs` file nothing is exempt. A repository's `.no-stubs`
+(or `projects/<p>/.no-stubs`, relative to its folder), read at the pull
+request's merge commit, may add, one per line (`#` starts a comment):
+
+- `exempt <glob>` for generated or vendored paths, with the same glob
+  syntax as `.file-lengths`
+
+`.no-stubs` may only shrink against the pull request base, and in a sync
+(see `.file-lengths`) also against the default branch tip, whose lines
+passed there. A new `exempt` line fails unless a reviewer adds the
+`no-stubs-exception` label to the pull request and then closes and reopens
+it. The label allows new lines only, never a stub outside them, so every
+stub that reaches a protected branch is named in `.no-stubs`.
+
+### Fixing a pull request that fails
+
+Implement each stub the failure names, or keep the work on its swarm or
+item branch until it is done. For generated or vendored code, add an
+`exempt` line and ask for the label. To check locally before pushing, run
+this anywhere in your repository (it needs bash, git, grep, awk and xargs;
+`--ci BASE` also checks that `.no-stubs` only shrank, given a copy of
+`scripts/sync-tip.sh` beside the script):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/malcomsonbrothers/org-checks/master/scripts/check-no-stubs.sh | bash
+```
+
 ## Pull request titles
 
 Candidate required workflow: `.github/workflows/pr-title.yml`. It is not in
@@ -496,11 +550,11 @@ A repository holding several projects keeps each under `projects/<project>/`
 its own branches: `<project>/swarm/run`, `<project>/swarm/next` and
 `<project>/staging`. The checks key on the folder, not on a monorepo flag:
 any repository with a top-level `projects/<x>/.file-lengths`,
-`.commit-size`, `.crate-tokens` or `.binary-allow` has it read as that
+`.commit-size`, `.crate-tokens`, `.binary-allow` or `.no-stubs` has it read as that
 folder's config.
 
 - `projects/<project>/.file-lengths`, `.commit-size`, `.crate-tokens` and
-  `.binary-allow` add lines with paths, globs and units relative to that folder (`.` is the
+  `.binary-allow` and `.no-stubs` add lines with paths, globs and units relative to that folder (`.` is the
   folder itself). They cannot reach outside it. `limit` lines stay in the
   root `.file-lengths`. A path with rows in two files is an error.
 - Each file may only shrink against the same file at the base, so moving
@@ -525,7 +579,7 @@ After editing the script, paste it back into the workflow between
 checked by `scripts/check-crate-tokens.test.sh` (it fetches only uv and the
 pinned tiktoken), and `commit-size.yml` embeds `scripts/check-commit-size.sh`,
 checked by `scripts/check-commit-size.test.sh`. `no-binaries.yml` embeds
-`scripts/check-binaries.sh`, `scripts/lists/no-binaries.txt` and `scripts/fresh-clone.sh` the same way. The tests run in `.github/workflows/tests.yml` on every
+`scripts/check-binaries.sh`, `scripts/lists/no-binaries.txt` and `scripts/fresh-clone.sh` the same way, and `no-stubs.yml` embeds `scripts/check-no-stubs.sh`, checked by a step in `tests.yml`. The tests run in `.github/workflows/tests.yml` on every
 push and pull request.
 
 ### How the checks fetch the pull request
@@ -535,22 +589,22 @@ between jobs, so another job can leave it as a blob-less (filtered) or
 shallow clone. `actions/checkout` reuses such a `.git`, and a check that
 later needs a missing blob fails because the job can no longer fetch it.
 So `commit-size.yml`, `file-lengths.yml`, `crate-tokens.yml`,
-`path-collisions.yml`, `no-binaries.yml`, `agent-guidance.yml` and
+`path-collisions.yml`, `no-binaries.yml`, `no-stubs.yml`, `agent-guidance.yml` and
 `org-hooks.yml` never use
 the workspace: `scripts/fresh-clone.sh`, embedded between `<<'CLONE'` and
 `CLONE` like the engines, fetches the pull request into a new repository
 under `$RUNNER_TEMP`, never with a filter, using the job token through an
 environment-only header that is never written to `.git/config`. The commit
 size and no-binaries checks fetch the full history of the merge commit and
-head (fork heads come through the base repository); the file length and
-crate token checks initially fetch only the merge commit and its parents,
+head (fork heads come through the base repository); the file length,
+no-stubs and crate token checks initially fetch only the merge commit and its parents,
 two commits deep (crate tokens fetches complete history only for candidate
 allowance additions), the path collision check only the merge commit, and the org hooks
 check only the pull request head, one commit deep. `scripts/fresh-clone.test.sh`
 replays the blob-less workspace failure and fails while a workflow's copy
 differs from the script.
 
-Those four checks compare with the merge commit's first parent, the base
+Those five checks compare with the merge commit's first parent, the base
 branch tip GitHub built the merge on (`scripts/current-base.sh`, embedded
 between `<<'BASE'` and `BASE`), never the event's `pull_request.base.sha`.
 A reopened pull request keeps the base.sha from when it was opened while
