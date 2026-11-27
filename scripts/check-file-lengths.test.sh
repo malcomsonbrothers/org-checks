@@ -207,10 +207,10 @@ repo dotdir; lines 700 projects/.hid/big.rs; printf 'baseline big.rs 700\n' > pr
 check; expect "a dot-folder config is not read, tree" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 check --range HEAD~1 HEAD; expect "nor at a commit" 1 'projects/.hid/big.rs: 700 lines, limit 600'
 
-# The runner every required check uses: the light self-hosted pool on metal-02 only for
-# private and internal repositories, GitHub-hosted otherwise (fail safe if visibility is unset).
-hybrid=$(cat <<'RUNNER'
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+# The runner every required check uses: the light self-hosted pool, for every repository
+# (the org's Actions budget refuses GitHub-hosted jobs).
+light=$(cat <<'RUNNER'
+    runs-on: [self-hosted, Linux, light]
 RUNNER
 )
 
@@ -220,17 +220,17 @@ run grep -n -E 'inputs\.mode|\$MODE|report|workflow_call' "$wf"; expect "no repo
 run grep -n -E '^  pull_request:$|--ci "\$CURRENT_BASE"' "$wf"
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 2 ] && rc=0 || rc=1
 expect "required workflow: pull_request trigger, --ci against the base" 0
-run grep -n -x -F "$hybrid" "$wf"; expect "required workflow: self-hosted only for private and internal repositories" 0
-# Every workflow's runner, exactly: the required and candidate checks use the hybrid runner;
-# stale-pins and this repository's own tests always run GitHub-hosted.
+run grep -n -x -F "$light" "$wf"; expect "required workflow: the light self-hosted pool for every repository" 0
+# Every workflow's runner, exactly: the checks and this repository's own tests use the light
+# pool; stale-pins stays GitHub-hosted (it holds the ruleset read token).
 runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_ALL=C sort; }
 run runners
-[ "$out" = "$(printf '%s\n' "agent-guidance.yml:$hybrid" \
-  "commit-count.yml:$hybrid" "commit-size.yml:$hybrid" \
-  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:$hybrid" "no-stubs.yml:$hybrid" \
-  "org-hooks.yml:$hybrid" \
-  "path-collisions.yml:$hybrid" \
-  "pr-title.yml:$hybrid" "stale-pins.yml:    runs-on: ubuntu-latest" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
+[ "$out" = "$(printf '%s\n' "agent-guidance.yml:$light" \
+  "commit-count.yml:$light" "commit-size.yml:$light" \
+  "crate-tokens.yml:$light" "file-lengths.yml:$light" "no-binaries.yml:$light" "no-stubs.yml:$light" \
+  "org-hooks.yml:$light" \
+  "path-collisions.yml:$light" \
+  "pr-title.yml:$light" "stale-pins.yml:    runs-on: ubuntu-latest" "tests.yml:$light")" ] && rc=0 || rc=1
 expect "every workflow runs on its intended runner and no other" 0
 
 # The required workflow embeds this exact script.

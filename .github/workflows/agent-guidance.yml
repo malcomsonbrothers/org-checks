@@ -11,9 +11,12 @@ permissions:
 
 jobs:
   agent-guidance:
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 5
     steps:
+      # Light runners keep HOME between jobs: each job gets a fresh one in its temporary directory.
+      - name: Use a fresh home
+        run: mkdir -p "$RUNNER_TEMP/home" && echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - name: Fetch the pull request into a fresh clone
         env:
           FRESH_CLONE_TOKEN: ${{ github.token }}

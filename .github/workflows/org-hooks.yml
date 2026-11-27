@@ -22,9 +22,12 @@ jobs:
   org-hooks:
     # endsWith also matches a/b/staging; the shell gate below keeps only one folder segment.
     if: github.event.pull_request.base.ref == github.event.repository.default_branch || github.event.pull_request.base.ref == 'staging' || endsWith(github.event.pull_request.base.ref, '/staging')
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 5
     steps:
+      # Light runners keep HOME between jobs: each job gets a fresh one in its temporary directory.
+      - name: Use a fresh home
+        run: mkdir -p "$RUNNER_TEMP/home" && echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - name: Only pull requests into the default branch, staging or <project>/staging
         id: gate
         env:

@@ -43,9 +43,12 @@ permissions:
 
 jobs:
   file-lengths:
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'private' || github.event.repository.visibility == 'internal') && '["self-hosted", "Linux", "light"]' || '["ubuntu-latest"]') }}
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 15
     steps:
+      # Light runners keep HOME between jobs: each job gets a fresh one in its temporary directory.
+      - name: Use a fresh home
+        run: mkdir -p "$RUNNER_TEMP/home" && echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       # A new clone in the job's temporary directory, never the runner's reused workspace
       # (see scripts/fresh-clone.sh, embedded like the engine: paste it back after editing).
       - name: Fetch the pull request into a fresh clone

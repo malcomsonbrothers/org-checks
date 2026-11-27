@@ -17,9 +17,12 @@ permissions:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, light]
     timeout-minutes: 5
     steps:
+      # Light runners keep HOME between jobs: each job gets a fresh one in its temporary directory.
+      - name: Use a fresh home
+        run: mkdir -p "$RUNNER_TEMP/home" && echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
