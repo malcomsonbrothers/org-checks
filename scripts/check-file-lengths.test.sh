@@ -227,7 +227,7 @@ runners() { (cd "$here/.github/workflows" && grep -H 'runs-on:' -- *.yml) | LC_A
 run runners
 [ "$out" = "$(printf '%s\n' "agent-guidance.yml:$hybrid" \
   "commit-count.yml:$hybrid" "commit-size.yml:$hybrid" \
-  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:$hybrid" \
+  "crate-tokens.yml:$hybrid" "file-lengths.yml:$hybrid" "no-binaries.yml:$hybrid" "no-stubs.yml:$hybrid" \
   "org-hooks.yml:$hybrid" \
   "path-collisions.yml:$hybrid" \
   "pr-title.yml:$hybrid" "stale-pins.yml:    runs-on: ubuntu-latest" "tests.yml:    runs-on: ubuntu-latest")" ] && rc=0 || rc=1
