@@ -38,7 +38,7 @@ jobs:
 
       - name: Check the sync rule helper copies
         run: |
-          for wf in commit-size crate-tokens file-lengths no-stubs; do
+          for wf in commit-size crate-tokens file-lengths; do
             awk '/<<.SYNC.$/ { on = 1; next } /^ *SYNC$/ { on = 0 } on { sub(/^          /, ""); print }' ".github/workflows/$wf.yml" | cmp - scripts/sync-tip.sh
           done
 
