@@ -4,31 +4,20 @@
 # for testers, agents' end-to-end runs and users. So on pull requests into those branches it reads
 # every file of the merge commit and fails on a Rust todo!() or unimplemented!() call in a .rs file
 # (not in a comment), or the stub marker (see scripts/check-no-stubs.sh) in any text file but
-# Markdown.
+# Markdown. It always enforces: there is no exemption file and no exception label.
 #
-# The repository's optional .no-stubs (and projects/<p>/.no-stubs) exempts generated or vendored
-# paths. It may only shrink against the pull request base: a new exempt line fails unless the pull
-# request has the no-stubs-exception label (then close and reopen the pull request to re-run). In
-# a sync (see file-lengths.yml), lines the default branch tip already has also count as old.
-#
-# The engine below is scripts/check-no-stubs.sh, embedded like file-lengths.yml's so the job
-# fetches nothing and the ruleset's pinned commit pins the engine too. After editing the script,
-# paste it back between <<'ENGINE' and ENGINE indented ten spaces; tests.yml fails while the two
-# differ.
+# The engine below is scripts/check-no-stubs.sh, embedded so the job fetches nothing and the
+# ruleset's pinned commit pins the engine too. After editing the script, paste it back between
+# <<'ENGINE' and ENGINE indented ten spaces; tests.yml fails while the two differ.
 
 name: No Stubs
 
 on:
   pull_request:
-    # labeled/unlabeled re-run it when this workflow runs directly (this repository). An org
-    # ruleset ignores types and runs it only on opened, synchronize and reopened, so there, after
-    # changing the no-stubs-exception label, re-run the failed check: it reads the labels live.
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
 
 jobs:
   no-stubs:
@@ -43,9 +32,6 @@ jobs:
         env:
           FRESH_CLONE_TOKEN: ${{ github.token }}
           PR_MERGE: ${{ github.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           clone="$RUNNER_TEMP/fresh-clone.sh"
           cat > "$clone" <<'CLONE'
@@ -110,110 +96,30 @@ jobs:
           echo "fresh-clone: fetched $* into $dest${depth[*]:+ (${depth[*]})}${commit:+, checked out $commit}"
           CLONE
           chmod +x "$clone"
-          # The engine reads the pull request's merge commit, and the .no-stubs files of its first
-          # parent (the base) and of the default branch, never with a filter. Two commits of each are
-          # enough (the merge and its parents), except for a possible sync (see file-lengths.yml), where
-          # the engine needs full history; it treats a shallow clone as no sync. Only a change to a
-          # .no-stubs can need a sync, so only then is the clone made again in full, once the base is known.
-          refs=("+$PR_MERGE:refs/check/merge" "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH")
-          depth=(--depth 2)
-          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "${depth[@]}" --checkout "$PR_MERGE" "${refs[@]}"
-          # Compare with the base branch tip the merge was built on, never the event's base.sha, which
-          # can be older (see scripts/current-base.sh, embedded like the clone script).
-          base_of="$RUNNER_TEMP/current-base.sh"
-          cat > "$base_of" <<'BASE'
-          #!/usr/bin/env bash
-          # Prints the base a required workflow compares a pull request with: the first parent of the pull
-          # request's merge commit (github.sha), the base branch tip GitHub built that merge on. Never the
-          # event's pull_request.base.sha: a reopened pull request keeps the base.sha from when it was
-          # opened while GitHub rebuilds the merge on the current tip, so comparing with it blames the pull
-          # request for rows the base branch gained since. Run it in the clone, after fetching the merge
-          # with its parents (depth 2 or more). Needs only bash and git.
-          #   current-base.sh MERGE
-          # Fails (exit 2) unless MERGE is a commit with exactly two parents, the first present with its tree.
-          set -euo pipefail
-          fail() { echo "current-base: $*" >&2; exit 2; }
-          [ $# -eq 1 ] && [ -n "$1" ] || fail "usage: current-base.sh MERGE"
-          merge=$(git rev-parse --verify --quiet "$1^{commit}") || fail "$1 is not a commit in this clone"
-          read -r -a ps < <(git rev-list --parents -n 1 "$merge" || :)
-          [ "${#ps[@]}" -eq 3 ] || fail "$merge is not a two-parent merge commit, or its parents were not fetched"
-          git cat-file -e "${ps[1]}^{tree}" 2>/dev/null || fail "the first parent ${ps[1]} of $merge was not fetched"
-          echo "${ps[1]}"
-          BASE
-          chmod +x "$base_of"
-          base=$(cd "$RUNNER_TEMP/pr" && "$base_of" "$PR_MERGE")
-          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] &&
-            ! git -C "$RUNNER_TEMP/pr" diff --quiet "$base" "$PR_MERGE" -- .no-stubs ':(glob)projects/*/.no-stubs'; then
-            "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --checkout "$PR_MERGE" "${refs[@]}"
-          fi
-          echo "CURRENT_BASE=$base" >> "$GITHUB_ENV"
-          echo "Comparing with $base, the first parent of the merge commit $PR_MERGE"
-
-      # The label as it is now, read through the API, not from the event: gh pr create --label adds
-      # labels just after the opened event, and a re-run replays the original event.
-      - name: Read the no-stubs-exception label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --paginate --jq '.[].name')
-          if grep -qxF 'no-stubs-exception' <<<"$labels"; then value=true; else value=false; fi
-          echo "NO_STUBS_EXCEPTION=$value" >> "$GITHUB_ENV"
-          echo "no-stubs-exception label on the pull request: $value"
+          # The engine reads only the files of the pull request's merge commit: one commit, checked
+          # out, never a filter.
+          "$clone" "$RUNNER_TEMP/pr" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --depth 1 --checkout "$PR_MERGE" "+$PR_MERGE:refs/check/merge"
 
       - name: Check for implementation stubs
         working-directory: ${{ runner.temp }}/pr
         env:
-          NO_STUBS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          NO_STUBS_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          NO_STUBS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          NO_STUBS_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          NO_STUBS_REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ "$NO_STUBS_BASE_REF" != "$NO_STUBS_DEFAULT_BRANCH" ] && ! [[ $NO_STUBS_BASE_REF =~ ^([^/]+/)?staging$ ]]; then
-            echo "no-stubs: $NO_STUBS_BASE_REF is not a protected branch: nothing to check"; exit 0
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && ! [[ $BASE_REF =~ ^([^/]+/)?staging$ ]]; then
+            echo "no-stubs: $BASE_REF is not a protected branch: nothing to check"; exit 0
           fi
-          # The sync rule the engine runs from beside it (scripts/sync-tip.sh, embedded like the engine).
-          cat > "$RUNNER_TEMP/sync-tip.sh" <<'SYNC'
-          #!/usr/bin/env bash
-          # Tells a sync pull request apart for the shrink-only config rules of commit-size, file-lengths and
-          # crate-tokens, which run it from beside their engine. A sync's head comes from this repository (REPO),
-          # its head ref is the default branch, or <p>/sync/<x> into BASE_REF <p>/staging where BASE has
-          # projects/<p>/, and in a full clone TIP has origin/<default>'s tip while BASE does not. Only then do
-          # that tip's own config lines count as old too; anything beyond them still needs the exception label.
-          #   sync-tip.sh DEFAULT REPO HEAD_REPO BASE_REF HEAD_REF BASE [TIP]
-          # Without TIP: exit 0 if the refs allow a sync, else 1. With TIP: prints the tip in a sync, else nothing.
-          set -euo pipefail
-          [ $# -eq 6 ] || [ $# -eq 7 ] || { echo "usage: sync-tip.sh DEFAULT REPO HEAD_REPO BASE_REF HEAD_REF BASE [TIP]" >&2; exit 2; }
-          d=$1 h=$5 base=$6
-          if [[ $4 =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)/staging$ ]] && [[ $h == "${BASH_REMATCH[1]}"/sync/?* ]] &&
-            [ -n "$base" ] && [ "$(git cat-file -t "$base:projects/${4%/staging}" 2>/dev/null)" = tree ]; then h=$d; fi
-          if [ -z "$d" ] || [ "$h" != "$d" ] || [ -z "$2" ] || [ "$3" != "$2" ]; then [ $# -eq 7 ] && exit 0; exit 1; fi
-          [ $# -eq 7 ] || exit 0
-          t=$(git rev-parse -q --verify "refs/remotes/origin/$d^{commit}") || exit 0
-          [ "$(git rev-parse --is-shallow-repository)" = false ] && git merge-base --is-ancestor "$t" "$7" || exit 0
-          [ -n "$base" ] && git merge-base --is-ancestor "$t" "$base" 2>/dev/null && exit 0
-          echo "$t"
-          SYNC
-          chmod +x "$RUNNER_TEMP/sync-tip.sh"
           engine="$RUNNER_TEMP/check-no-stubs.sh"
           cat > "$engine" <<'ENGINE'
           #!/usr/bin/env bash
-          # Org-wide refusal of implementation stubs. Needs only bash, git, grep, awk and xargs. Never skips: without
-          # .no-stubs nothing is exempt.
-          #   check-no-stubs.sh             tracked and untracked files in the working tree
-          #   check-no-stubs.sh --ci BASE   the working tree, and .no-stubs may only shrink (see CI below)
+          # Org-wide refusal of implementation stubs. Needs only bash, git, grep, awk and xargs. Never skips, and
+          # nothing can be exempted: no config file, no label.
+          #   check-no-stubs.sh   tracked and untracked files in the working tree (in CI, the pull request's merge)
           # A stub is a Rust todo!() or unimplemented!() call in a .rs file, or the stub marker in any text file but
           # Markdown (md, markdown, mdx), where docs describe it. The marker is TODO and STUB joined by a hyphen; this
           # file spells it in two parts so it never carries it. A Rust match after // or /* on its line is a comment
-          # that only names the macro, so it passes. A zero or missing BASE: the merge-base with
-          # NO_STUBS_DEFAULT_BRANCH, origin/HEAD, main or master. In a sync (see sync-tip.sh, beside this engine)
-          # the default branch's .no-stubs lines count as old too. NO_STUBS_EXCEPTION=true (the PR label) allows new lines.
-          # .no-stubs lines (# starts a comment):   exempt <glob>
-          # Globs: * is one path segment, ** any depth, others literal. projects/<p>/.no-stubs paths are folder-relative.
+          # that only names the macro, so it is not a stub. Binaries (a NUL byte), symlinks and submodules are skipped.
           set -euo pipefail
           export LC_ALL=C
 
@@ -222,69 +128,15 @@ jobs:
           rust='(^|[^A-Za-z0-9_])(todo|unimplemented)![ '$'\t'']*[({[]'
           docs="md markdown mdx"
 
+          [ $# -eq 0 ] || { echo "usage: check-no-stubs.sh" >&2; exit 2; }
           cd "$(git rev-parse --show-toplevel)"
-          config=.no-stubs
           tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-          fail() { echo "no-stubs: $*" >&2; exit 2; }
-          is_zero() { case ${1:-0} in *[!0]*) return 1 ;; *) return 0 ;; esac; }
           ext='function ext(p) { sub(/.*\//, "", p); sub(/^\.+/, "", p); if (p !~ /\.[^.]+$/) return ""; sub(/.*\./, "", p); return tolower(p) }'
 
-          # Prints the merge-base of TIP with the default branch, or nothing.
-          fallback_base() {
-            local b d=${NO_STUBS_DEFAULT_BRANCH:-}
-            for b in ${d:+"origin/$d" "$d"} "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || :)" origin/main origin/master; do
-              if [ -n "$b" ] && git rev-parse -q --verify "$b^{commit}" >/dev/null; then git merge-base "$1" "$b" 2>/dev/null || :; return; fi
-            done
-          }
-
-          # Turns a .no-stubs text (stdin) at path CFG, with globs relative to folder PRE, into rule records:
-          #   E regex glob config (repo exempt) | X error
-          parse_rules() {
-            awk -v cfg="$1" -v pre="$2" -v ref="$3" '
-              function glob_re(g,   r, c, i) {
-                for (i = 1; i <= length(g); i++) { c = substr(g, i, 1)
-                  if (c == "*" && substr(g, i, 3) == "**/") { r = r "(.*/)?"; i += 2 }
-                  else if (c == "*" && substr(g, i, 2) == "**") { r = r ".*"; i++ }
-                  else if (c == "*") r = r "[^/]*"; else if (c == "?") r = r "[^/]"
-                  else if (index("\\.[]()+{}|^$", c)) r = r "\\" c; else r = r c
-                }
-                return "^" r "$"
-              }
-              { sub(/\r$/, "") }
-              /^[ \t]*(#|$)/ { next }
-              $1 == "exempt" && NF == 2 { print "E " glob_re(pre $2) " " $2 " " cfg; next }
-              { print "X " ref cfg ":" NR ": unknown or malformed line (only exempt <glob> is allowed): " $0 }'
-          }
-
-          # Prints the rule records of .no-stubs and each projects/<p>/.no-stubs at commit REF (empty: the working tree).
-          rules_at() {
-            local f
-            if [ -z "$1" ]; then printf '%s\n' "$config" projects/*/"$config"
-            else git ls-tree -r --name-only "$1" -- "$config" projects; fi |
-              awk '/^(projects\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/)?\.no-stubs$/' | while IFS= read -r f; do
-                if [ -z "$1" ]; then
-                  if [ -f "$f" ]; then parse_rules "$f" "${f%"$config"}" "" < "$f"; fi
-                else git show "$1:$f" | parse_rules "$f" "${f%"$config"}" "$1:"; fi
-              done
-          }
-
-          ci=0
-          case ${1:-} in
-            --ci) ci=1; [ $# -le 2 ] || fail "usage: check-no-stubs.sh [--ci BASE]" ;;
-            '') ;;
-            *) fail "usage: check-no-stubs.sh [--ci BASE]" ;;
-          esac
-
-          rules_at "" > "$tmp/rules"
-          status=0
-          if grep -q '^X ' "$tmp/rules"; then sed -n 's/^X /[FAIL] /p' "$tmp/rules"; status=1; fi
-
-          # Every regular file that is not exempt, split into Rust files and files that may carry the marker.
-          git ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | sort -u |
-            awk -v rules="$tmp/rules" 'BEGIN { while ((getline r < rules) > 0) { split(r, w, " "); if (w[1] == "E") ex[w[2]] = 1 } }
-              { for (re in ex) if ($0 ~ re) next; print }' | while IFS= read -r f; do
-              if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\n' "$f"; fi
-            done > "$tmp/files"
+          # Every regular file, split into Rust files and files that may carry the marker.
+          git ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | sort -u | while IFS= read -r f; do
+            if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\n' "$f"; fi
+          done > "$tmp/files"
           awk -v docs="$docs" -v rs="$tmp/rs" -v txt="$tmp/txt" "$ext"'
             BEGIN { n = split(docs, d, " "); for (i = 1; i <= n; i++) doc[d[i]] = 1; printf "" > rs; printf "" > txt }
             { e = ext($0) } e == "rs" { print > rs } !(e in doc) { print > txt }' "$tmp/files"
@@ -306,52 +158,23 @@ jobs:
           cat "$tmp/stubs"
           echo "no-stubs: $(awk 'END { print NR }' "$tmp/files") file(s) checked, $found stub(s)"
           if [ "$found" -gt 0 ]; then
-            status=1
-            echo "no-stubs: implement each stub before it reaches a protected branch. Generated or vendored paths go in" \
-              ".no-stubs as exempt <glob>; a reviewer allows a new line with the no-stubs-exception label, then closes and reopens the pull request."
+            echo "no-stubs: implement each stub before it reaches a protected branch; stubs belong on swarm and item branches only."
+            echo "no-stubs: see scripts/check-no-stubs.sh"
+            exit 1
           fi
-
-          # CI: each .no-stubs may only shrink against BASE, and in a sync the default branch tip.
-          if [ "$ci" -eq 1 ]; then
-            base=${2:-}
-            if is_zero "$base" || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=$(fallback_base HEAD); fi
-            engine_dir=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)
-            [ -x "$engine_dir/sync-tip.sh" ] || fail "sync-tip.sh is missing beside the engine"
-            sync=$("$engine_dir/sync-tip.sh" "${NO_STUBS_DEFAULT_BRANCH:-}" "${NO_STUBS_REPO:-}" "${NO_STUBS_HEAD_REPO:-}" \
-              "${NO_STUBS_BASE_REF:-}" "${NO_STUBS_HEAD_REF:-}" "$base" HEAD)
-            for r in "$base" "$sync"; do [ -z "$r" ] || rules_at "$r"; done | grep '^E ' > "$tmp/old-rules" || true
-            awk 'FILENAME == ARGV[1] { old[$2 " " $4] = 1; next } $1 == "E" && !(($2 " " $4) in old) { print $4 " new exempt line " $3 }' \
-              "$tmp/old-rules" "$tmp/rules" > "$tmp/added"
-            if [ -s "$tmp/added" ]; then
-              if [ "${NO_STUBS_EXCEPTION:-}" = true ]; then
-                sed 's/^[^ ]* /no-stubs: allowed by the no-stubs-exception label: /' "$tmp/added"
-              else
-                sed 's/^\([^ ]*\) /[FAIL] \1: /' "$tmp/added"
-                echo "no-stubs: .no-stubs may only shrink. A reviewer allows an addition by" \
-                  "putting the no-stubs-exception label on the pull request, then closing and reopening it."
-                status=1
-              fi
-            fi
-          fi
-
-          [ "$status" -eq 0 ] && echo "no-stubs: ok" || echo "no-stubs: see .no-stubs and scripts/check-no-stubs.sh"
-          exit "$status"
+          echo "no-stubs: ok"
           ENGINE
           chmod +x "$engine"
           status=0
-          out=$("$engine" --ci "$CURRENT_BASE" 2>&1) || status=$?
+          out=$("$engine" 2>&1) || status=$?
           printf '%s\n' "$out"
           printf '%s\n' "$out" | sed -n -e 's/%/%25/g' \
-            -e "s/^\[FAIL\] \([^:]*\):\([0-9][0-9]*\): \(.*\)$/::error file=\1,line=\2,title=no-stubs::\3/p" \
-            -e "s/^\[FAIL\] \([^:]*\): \(.*\)$/::error file=\1,title=no-stubs::\2/p" \
-            -e "s/^\[FAIL\] \([^:]*\)$/::error title=no-stubs::\1/p"
+            -e "s/^\[FAIL\] \([^:]*\):\([0-9][0-9]*\): \(.*\)$/::error file=\1,line=\2,title=no-stubs::\3/p"
           {
             echo "## No stubs"
             if [ "$status" -eq 0 ]; then echo "No implementation stubs."; else
               echo "Failures (exit $status). Implement each stub before the pull request merges; stubs belong on"
-              echo "swarm and item branches only. Generated or vendored paths go in .no-stubs as exempt <glob>; a"
-              echo "reviewer allows a new line with the no-stubs-exception label, then closes and reopens the pull"
-              echo "request to re-run this check (see the malcomsonbrothers/org-checks README)."
+              echo "swarm and item branches only (see the malcomsonbrothers/org-checks README)."
             fi
             echo '```'
             printf '%s\n' "$out"
