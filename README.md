@@ -402,8 +402,8 @@ scripts/check-binaries.sh origin/main HEAD
 
 ## No stubs
 
-Candidate required workflow: `.github/workflows/no-stubs.yml` (no
-credentials). Adding it to the organisation ruleset is an owner step.
+Required workflow: `.github/workflows/no-stubs.yml` (no credentials),
+pinned in org ruleset 24585672.
 Skeletons with stubs belong on swarm and item branches. On a pull request
 into the default branch, `staging` or `<project>/staging` (one folder
 segment) it fails while any file of the merge commit holds a stub, because
