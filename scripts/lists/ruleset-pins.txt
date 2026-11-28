@@ -10,3 +10,7 @@
 .github/workflows/path-collisions.yml 97138a0ee47c25cd356dc50df3ad5892638fab0f
 .github/workflows/no-binaries.yml e5fa3d2297487fb11841031ae0241d82047961f7
 .github/workflows/agent-guidance.yml a120e52199814932888aaf9153de0a3ce37c0718
+.github/workflows/no-stubs.yml 19c294751923f9b4f6fe7b27f91a1606adefbeb1
+# Not in the ruleset (candidates only; adding them is an owner step):
+# .github/workflows/commit-count.yml
+# .github/workflows/org-hooks.yml
