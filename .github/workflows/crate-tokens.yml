@@ -796,7 +796,7 @@ jobs:
           # Config-only preflight does not load the tokeniser or source. The fresh-clone
           # helper authenticates only its fetch, through an environment-only header.
           preflight=0
-          uv run --no-config --quiet --script "$engine" --history-needed "$CURRENT_BASE" || preflight=$?
+          uv run --no-config --quiet --python 3.12 --script "$engine" --history-needed "$CURRENT_BASE" || preflight=$?
           if [ "$preflight" -eq 3 ]; then
             "$RUNNER_TEMP/fresh-clone.sh" "$RUNNER_TEMP/pr-history" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --checkout "$HISTORY_MERGE" \
               "+$HISTORY_MERGE:refs/check/merge" \
@@ -807,7 +807,7 @@ jobs:
           fi
           for attempt in 1 2; do
             status=0
-            out=$(uv run --no-config --quiet --script "$engine" --ci "$CURRENT_BASE" 2>&1) || status=$?
+            out=$(uv run --no-config --quiet --python 3.12 --script "$engine" --ci "$CURRENT_BASE" 2>&1) || status=$?
             # 0 passes and 1 is a real violation; anything else (a uv or network hiccup) is
             # not a verdict, so it gets one retry.
             if [ "$status" -le 1 ] || [ "$attempt" -eq 2 ]; then break; fi
